@@ -33,6 +33,24 @@ agent-role 的 README、工作流说明和相关网页
 
 这只是组合方式示意：`information-collection` 负责采集和固化资料，`knowledge-support-agent` 负责索引、检索与来源化回答，两者也都可以独立使用。同样的组合还可以用于 GitHub 热点、开源项目动态或某股票的公开公告与资讯；股票相关材料是带采集时间的公开信息快照，不代表实时行情或投资建议。
 
+另一个常见组合是完成从需求澄清到测试报告的测试交付链路：
+
+```text
+需求澄清与用例设计
+  requirements-analysis
+          ↓
+代码版本管理与推送
+     git-operations
+          ↓
+持续集成执行
+  jenkins-operations
+          ↓
+测试结果整理
+    test-reporting
+```
+
+其中，每个工作流只负责自己的领域能力，也可以单独使用；Agent 根据测试目标把它们组合成一条完整链路。
+
 ## 公开工作流
 
 | 工作流 | 简短介绍 | 常见组合用途 |
