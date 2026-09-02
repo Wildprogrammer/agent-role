@@ -1,64 +1,78 @@
 # Agent Workflow Hub
 
-Agent Workflow Hub 是一组面向多种 Agent 宿主的本地优先工作流。每个工作流声明自己的角色、能力、配置模板、运行前检查和交付物边界；实际能力仍由本机工具、目标系统权限和用户授权决定。
+Agent Workflow Hub 是一个面向 Agent 的模块化、可组合工作流框架。用户只需描述目标，Agent 会从根 `SKILL.md` 发现所需的角色、能力和领域工作流，并按任务需要组合执行。
+
+它不是一个固定用途的单体 Agent：每个模块都可以独立使用，也可以成为更大业务流程中的一个环节。
+
+## 模块如何组合
+
+- **角色（Role）**提供领域判断，例如需求分析、测试结果分析或技术审查。
+- **能力（Capability）**声明工具、依赖、版本和运行条件，例如 Git、Jenkins、LanceDB 或 AsyncSSH。
+- **单一工作流（Workflow）**封装一个可独立复用的领域功能，例如操作 Git、查询 MySQL 或生成测试报告。
+- **复合工作流（Composite Workflow）**按业务目标编排多个单一工作流，管理跨步骤状态和业务节点，但不复制单一工作流已有能力。
+
+例如，一个 Agent 可以把公开工作流组合成以下验证链路：
+
+```text
+需求澄清与用例设计
+  requirements-analysis
+          ↓
+代码版本管理与推送
+  git-operations
+          ↓
+持续集成执行
+  jenkins-operations
+          ↓
+测试结果整理
+  test-reporting
+```
+
+这只是组合方式示意：各工作流既能单独调用，也能由 Agent 或复合工作流按实际业务重新编排。
 
 ## 公开工作流
 
-- `3d-printing`
-- `bead-pattern`
-- `daily-assistant`
-- `git-operations`
-- `image-ocr`
-- `information-collection`
-- `jenkins-operations`
-- `knowledge-support-agent`
-- `meeting-notes`
-- `mysql-operations`
-- `requirements-analysis`
-- `ssh-operations`
-- `test-reporting`
+| 工作流 | 简短介绍 | 常见组合用途 |
+|---|---|---|
+| `3d-printing` | 设计、检查、拆分和切片 3D 打印模型，交付经检查的打印文件。 | 产品建模、制造准备 |
+| `bead-pattern` | 把本地图片转换为固定色板的拼豆图纸。 | 图像处理、手工作品设计 |
+| `daily-assistant` | 整理每日任务和进度，给出优先级建议并生成本地工作记录。 | 日程管理、工作汇报 |
+| `git-operations` | 查看和操作 Git 仓库，包括提交快照读取、分支、提交、合并和推送。 | 代码开发、持续集成、发布流程 |
+| `image-ocr` | 使用本地 OCR 从图片中提取按阅读顺序排列的文本。 | 文档采集、资料数字化 |
+| `information-collection` | 采集、筛选和总结指定网页资料，并按需生成交付文件。 | 调研、知识库建设、需求分析 |
+| `jenkins-operations` | 查询和操作 Jenkins 文件夹、视图、任务、Pipeline 与构建记录。 | 持续集成、自动化测试、发布流程 |
+| `knowledge-support-agent` | 从代码仓库、文档和已采集资料构建可追溯来源的本地知识解答 Agent。 | 内部答疑、产品知识库、研发支持 |
+| `meeting-notes` | 转写已授权的会议音视频，经人工审核后生成摘要和 Obsidian 会议记录。 | 会议归档、知识沉淀 |
+| `mysql-operations` | 查询或操作用户配置的 MySQL 数据库，并保留数据库自身权限边界。 | 数据核查、业务运维、测试准备 |
+| `requirements-analysis` | 澄清需求歧义，结合授权资料分析需求并生成可评审用例。 | 开发准备、测试设计、方案评审 |
+| `ssh-operations` | 连接 Windows、macOS 或 Linux 远程设备，执行命令、传输文件和建立端口转发。 | 远程运维、环境检查、日志收集 |
+| `test-reporting` | 把已有测试材料整理为结构统一、可追溯的 Markdown 测试报告。 | 自动化测试、持续集成、质量汇报 |
 
-## 独立 Skill
+## 如何使用
 
-- [Role-Gated Development](role-gated-development/README.md)：通用、风险驱动的四角色工作模式，可单独安装和使用，不依赖 Agent Workflow Hub 运行时；也可从[独立仓库](https://github.com/Wildprogrammer/role-gated-development)单独获取。
+1. 下载或克隆本仓库。
+2. 按所用 Agent 宿主的接入方式注册本仓库，或让 Agent 从根 `SKILL.md` 开始读取。宿主适配说明位于 `adapters/`。
+3. 直接用自然语言说明目标、输入和必要边界，由 Agent 选择并组合工作流。
+
+例如：
+
+- “使用需求分析工作流分析这份需求，并生成可评审用例。”
+- “连接配置中的测试服务器，查询服务状态并下载日志。”
+- “根据这个代码仓库和产品文档构建本地知识解答 Agent。”
+- “组合需求分析、Git、Jenkins 和测试报告工作流，完成一次需求验证。”
+
+用户通常不需要直接运行 `workflows/*/scripts/` 中的脚本；这些脚本是工作流提供给 Agent 的确定性执行接口。
+
+## 四角色协作模式
+
+[Role-Gated Development](role-gated-development/README.md) 是仓库内置的通用四角色 Skill，可独立使用，也可以配合复杂工作流按需启用主脑、业务审查、技术审查和文档记录。它也可以从[独立仓库](https://github.com/Wildprogrammer/role-gated-development)单独获取。
 
 ## 支持宿主
 
-根工作流合约支持 Codex、OpenClaw、Claude Code、Hermes 和 OpenCode。具体工作流能否执行，以其 `SKILL.md`、当前宿主适配证据、本机能力探测和目标系统权限为准。
+根工作流合约支持 Codex、OpenClaw、Claude Code、Hermes 和 OpenCode。具体工作流能否执行，以其 `SKILL.md`、当前宿主适配证据、本机能力和目标系统权限为准。
 
-## 安装
+## 参与贡献
 
-要求 Python 3.11 或更高版本。开发安装：
-
-```powershell
-python -m pip install -e ".[dev]"
-```
-
-## 快速开始
-
-```powershell
-workflow-hub list "<absolute-hub-root>"
-workflow-hub inspect git-operations --host codex "<absolute-hub-root>"
-workflow-hub doctor --host codex "<absolute-hub-root>"
-workflow-hub init-config mysql-operations "<absolute-config-directory>" "<absolute-hub-root>"
-```
-
-根 `SKILL.md` 负责工作流发现和通用运行规则；选定工作流后，其目录内 `SKILL.md` 是该领域步骤、确认点、输入和交付物的权威来源。
-
-## 验证
-
-```powershell
-python -m pytest -q
-workflow-hub validate "<absolute-hub-root>"
-```
-
-## 配置与凭据
-
-真实服务配置应保存在仓库外的用户私有目录。仓库中的示例只包含占位符或环境变量名称；Agent Workflow Hub 不提供公共账号，也不绕过 Jenkins、MySQL、Git 或其他目标系统自身权限。
-
-## 输出
-
-运行输出默认位于工作流声明的 `outputs/` 或用户明确指定的位置。这些运行产物不属于源码，不应提交到仓库。
+开发、验证和提交约定见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 ## 参考与致谢
 
