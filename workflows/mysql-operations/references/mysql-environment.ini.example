@@ -1,0 +1,12 @@
+; 环境式样例：仅声明环境名与连接字段，不含凭据，也不固定 database。
+; 复制到仓库外、私有且非链接的目录后再使用；INI 必须是绝对路径。
+; database 不是本样例的固定字段：缺失时必须由调用方在本次调用显式提供（database 或 connection_string），不猜测默认库。
+; 凭据可按需通过 username_env/password_env 或调用参数提供；本样例刻意不含任何凭据。
+; 该结构容忍其它 section（如 [target.redis]）；同一 INI 同时存在 [mysql] 时以 [mysql] 为准。
+
+[environment]
+name = autotest-platform-validated
+
+[target.mysql]
+host = 127.0.0.1
+port = 3306

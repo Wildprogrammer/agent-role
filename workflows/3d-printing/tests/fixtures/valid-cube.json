@@ -1,0 +1,8 @@
+{
+  "fixture": "unit-cube",
+  "dimensions_mm": [20, 20, 20],
+  "expected": {
+    "printable": true,
+    "failures": []
+  }
+}

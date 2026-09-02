@@ -1,0 +1,174 @@
+# 此文件只定义 Jenkins 操作范围，绝不保存用户名、Token 或密码。
+# confirm_writes 是 INI 层配置（省略即启用；显式 false 时独立能力直接执行受控写），不在此定义。
+version: 1
+
+rules:
+  # scope.controller 不是 Job 路径；配合 controller 读取权限查看版本和运行状态。
+  - name: read-local-controller
+    action: read
+    controllers: [local]
+    environments: [nonproduction]
+    path_prefixes: [scope.controller]
+    read_scopes: [controller]
+
+  # scope.root 不是 Job 路径；配合 root_list 列举根目录 Item。
+  - name: list-local-root
+    action: read
+    controllers: [local]
+    environments: [nonproduction]
+    path_prefixes: [scope.root]
+    read_scopes: [root_list]
+
+  # scope.nodes 只允许读取节点的最小状态摘要，不会返回节点配置、路径、监控明细或凭据。
+  - name: read-local-node-summary
+    action: read
+    controllers: [local]
+    environments: [nonproduction]
+    path_prefixes: [scope.nodes]
+    read_scopes: [nodes]
+
+  # path_prefixes 限制普通 Item 读取只能落在 projects/ 下。
+  - name: read-project-items
+    action: read
+    controllers: [local]
+    environments: [nonproduction]
+    path_prefixes: [projects]
+
+# 非生产创建示例。expires_at 到期后自动失效；取消注释前核对 Controller、路径和模板。
+#  - name: create-project-folder
+#    action: create_item
+#    controllers: [local]
+#    environments: [nonproduction]
+#    path_prefixes: [projects]
+#    item_types: [folder]
+#    templates: [folder-v1]
+#    expires_at: "2026-12-31T00:00:00+00:00"
+
+# 受控 pytest Pipeline 示例。pytest-inline-v1 只接受 repository_url、credentials_id、
+# agent_label、精确 commit_sha、临时 branch、仓库内 requirements/test 路径、runner_os 和
+# JSON pytest_args；不接收 Jenkinsfile、Groovy、XML、脚本片段或任意 shell 参数。
+#  - name: create-project-pytest-pipeline
+#    action: create_item
+#    controllers: [local]
+#    environments: [nonproduction]
+#    path_prefixes: [projects]
+#    item_types: [pipeline]
+#    templates: [pytest-inline-v1]
+#    # 每个 enum 都要替换成 Gate 2 已展示并批准的精确值；缺字段、增加字段或值不同都会拒绝。
+#    parameters:
+#      repository_url:
+#        enum: [https://git.example.test/acme/automation.git]
+#      credentials_id:
+#        enum: [pytest-repository-read]
+#      agent_label:
+#        enum: [linux-pytest]
+#      commit_sha:
+#        enum: [aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa]
+#      branch:
+#        enum: [test/test-20260727-001]
+#      requirements_path:
+#        enum: [requirements.txt]
+#      test_path:
+#        enum: [tests]
+#      runner_os:
+#        enum: [linux]
+#      pytest_args:
+#        enum: ['["-q", "--maxfail=1"]']
+#    expires_at: "2026-12-31T00:00:00+00:00"
+
+# 内联标准 Groovy Pipeline 示例。groovy-inline-v1 只接收非空 script；XML 转义后写入
+# CpsFlowDefinition 且 sandbox=true，由 Jenkins sandbox/RBAC 约束，不做命令黑名单。
+#  - name: create-project-groovy-pipeline
+#    action: create_item
+#    controllers: [local]
+#    environments: [nonproduction]
+#    path_prefixes: [projects]
+#    item_types: [pipeline]
+#    templates: [groovy-inline-v1]
+#    parameters:
+#      script:
+#        enum: ["pipeline { agent any; stages { stage('Build') { steps { echo 'ok' } } } }"]
+#    expires_at: "2026-12-31T00:00:00+00:00"
+
+# 仓库 Jenkinsfile Pipeline 示例。jenkinsfile-scm-v1 接收 repository_url、branch/spec、
+# script_path（空则默认 Jenkinsfile）与 credentials_id（空则省略 credentialsId 元素）。
+#  - name: create-project-jenkinsfile-pipeline
+#    action: create_item
+#    controllers: [local]
+#    environments: [nonproduction]
+#    path_prefixes: [projects]
+#    item_types: [pipeline]
+#    templates: [jenkinsfile-scm-v1]
+#    parameters:
+#      repository_url:
+#        enum: [https://git.example.test/acme/repo.git]
+#      branch:
+#        enum: ['*/main']
+#      script_path:
+#        enum: [""]
+#      credentials_id:
+#        enum: [""]
+#    expires_at: "2026-12-31T00:00:00+00:00"
+
+# 非生产更新示例。allowed_fields 是唯一允许修改的字段；更新前 MCP 仍会做快照和 diff。
+#  - name: update-project-description
+#    action: update_item
+#    controllers: [local]
+#    environments: [nonproduction]
+#    path_prefixes: [projects]
+#    item_types: [freestyle]
+#    templates: [freestyle-v1]
+#    allowed_fields: [description]
+#    expires_at: "2026-12-31T00:00:00+00:00"
+
+# Pipeline definition 更新示例。template_parameters 的键和值必须与 parameters 完全匹配；
+# 服务只替换顶层 definition，并验证所有未修改配置保持不变。
+#  - name: update-project-pytest-pipeline
+#    action: update_item
+#    controllers: [local]
+#    environments: [nonproduction]
+#    path_prefixes: [projects/automation-tests]
+#    item_types: [pipeline]
+#    templates: [pytest-inline-v1]
+#    allowed_fields: [pipeline_definition]
+#    parameters:
+#      repository_url:
+#        enum: [https://git.example.test/acme/automation.git]
+#      credentials_id:
+#        enum: [pytest-repository-read]
+#      agent_label:
+#        enum: [linux-pytest]
+#      commit_sha:
+#        enum: [aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa]
+#      branch:
+#        enum: [test/test-20260727-001]
+#      requirements_path:
+#        enum: [requirements.txt]
+#      test_path:
+#        enum: [tests]
+#      runner_os:
+#        enum: [linux]
+#      pytest_args:
+#        enum: ['["-q", "--maxfail=1"]']
+#    expires_at: "2026-12-31T00:00:00+00:00"
+
+# 构建触发示例。parameters 只允许列出的枚举值；max_concurrent 限制同时运行数量。
+#  - name: trigger-project-main
+#    action: trigger_build
+#    controllers: [local]
+#    environments: [nonproduction]
+#    path_prefixes: [projects/build-api]
+#    parameters:
+#      branch:
+#        enum: [main]
+#    max_concurrent: 1
+#    expires_at: "2026-12-31T00:00:00+00:00"
+
+# 取消构建示例。max_concurrent 同样为必填；触发与取消都不会被普通 CRU 规则预授权。
+#  - name: cancel-project-build
+#    action: cancel_build
+#    controllers: [local]
+#    environments: [nonproduction]
+#    path_prefixes: [projects/build-api]
+#    max_concurrent: 1
+#    expires_at: "2026-12-31T00:00:00+00:00"

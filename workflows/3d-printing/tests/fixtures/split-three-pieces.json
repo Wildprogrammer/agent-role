@@ -1,0 +1,47 @@
+{
+  "split_requested": true,
+  "reason": "exceeds confirmed build volume",
+  "units": "mm",
+  "source_model": "source/model.stl",
+  "connection_strategy": "none",
+  "cuts": [
+    {
+      "id": "cut-01",
+      "input_piece": "source",
+      "point_mm": [0, 0, 0],
+      "normal": [1, 0, 0],
+      "negative_piece": "piece-a",
+      "positive_piece": "piece-b"
+    },
+    {
+      "id": "cut-02",
+      "input_piece": "piece-b",
+      "point_mm": [20, 0, 0],
+      "normal": [0, 1, 0],
+      "negative_piece": "piece-b1",
+      "positive_piece": "piece-b2"
+    }
+  ],
+  "plates": [
+    {
+      "id": "plate-01",
+      "piece_ids": ["piece-a"]
+    },
+    {
+      "id": "plate-02",
+      "piece_ids": ["piece-b1", "piece-b2"],
+      "layout": [
+        {
+          "piece_id": "piece-b1",
+          "position_mm": [20, 20, 0],
+          "rotation_deg": [0, 0, 0]
+        },
+        {
+          "piece_id": "piece-b2",
+          "position_mm": [90, 20, 0],
+          "rotation_deg": [0, 0, 0]
+        }
+      ]
+    }
+  ]
+}

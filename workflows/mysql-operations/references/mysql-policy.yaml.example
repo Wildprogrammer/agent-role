@@ -1,0 +1,50 @@
+# policy 可选；未配置时以数据库账号权限直接执行，不默认启用只读门或写前确认。
+# 复制到仓库外、与 mysql.ini 同一安全目录后再替换所有示例范围。
+# 配置后本样例规则仅 metadata/read/explain；不要取消注释写入、DDL 或迁移规则并直接使用。
+# 每条有效规则必须完整匹配 target、environment、action、schema、单一 table、列及行数约束；规则不会扩大数据库账号权限。
+version: 1
+rules:
+  - name: qa-device-read
+    targets: [qa-mysql]
+    environments: [qa]
+    actions: [metadata, read, explain]
+    schemas: [autotest]
+    tables: [test_devices]
+    columns: [id, device_name, status]
+    max_return_rows: 200
+
+  - name: qa-test-data-read
+    targets: [qa-mysql]
+    environments: [qa]
+    actions: [metadata, read, explain]
+    schemas: [autotest]
+    tables: [test_data]
+    columns: [id, case_key, state]
+    max_return_rows: 200
+
+# 关闭的写入示例：不要取消注释并直接使用。真实规则还需精确表/列、行数、到期时间与 WHERE/主键约束。
+# - name: qa-device-update
+#   targets: [qa-mysql]
+#   environments: [qa]
+#   actions: [update]
+#   schemas: [autotest]
+#   tables: [test_devices]
+#   columns: [id, status]
+#   max_dml_rows: 1
+#   requires_where: true
+#   requires_primary_key: true
+#   primary_key_columns: [id]
+#   expires_at: "2030-01-01T00:00:00+00:00"
+
+# 关闭的迁移示例：应用迁移还必须使用固定迁移目录、已审查 migration ID、账本与宿主原生用户确认。
+# - name: qa-migration
+#   targets: [qa-mysql]
+#   environments: [qa]
+#   actions: [apply_migration]
+#   schemas: [autotest]
+#   tables: [test_devices]
+#   columns: [id]
+#   migration_directory: migrations
+#   migration_ids: [0001_add_device_state]
+#   migration_ledger_tables: [agent_workflow_hub_migrations]
+#   expires_at: "2030-01-01T00:00:00+00:00"

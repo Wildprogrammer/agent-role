@@ -1,0 +1,11 @@
+{
+  "jobs": [
+    {
+      "name": "main",
+      "fullName": "teams/monorepo/main",
+      "_class": "org.jenkinsci.plugins.workflow.job.WorkflowJob",
+      "url": "https://jenkins.example.test/job/teams/job/monorepo/job/main/",
+      "color": "blue"
+    }
+  ]
+}

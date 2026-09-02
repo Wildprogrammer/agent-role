@@ -1,0 +1,6 @@
+--index-url https://download.pytorch.org/whl/cpu
+--extra-index-url https://pypi.org/simple
+
+funasr==1.3.14
+torch==2.5.1
+torchaudio==2.5.1

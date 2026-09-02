@@ -1,0 +1,4 @@
+interface:
+  display_name: "Role-Gated Development"
+  short_description: "Use lightweight risk-based business and technical review gates."
+  default_prompt: "Use $role-gated-development to classify the current task at intake and material checkpoints, move direct/light/planned in either direction as understanding changes, trigger only needed roles, and have Role 1 constructively challenge unsound proposals. On an explicit new-conversation context-transfer request, have Role 4 select and update exactly one authoritative handoff source, automatically persist and display its paired continuation prompt without a separate prompt request, then have orchestration create or transfer the conversation using that prompt."

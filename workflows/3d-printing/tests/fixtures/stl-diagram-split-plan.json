@@ -1,0 +1,5 @@
+{
+  "split_requested": true,
+  "connection_strategy": "integrated-keyed-pin",
+  "structure_diagram_filename": "structure-diagram.png"
+}

@@ -1,0 +1,23 @@
+; 将此样例与可选的 mysql-policy.yaml.example 一同复制到仓库外、私有且非链接的目录。
+; 真正传入 workflow-hub mysql-mcp 的 INI 必须是绝对路径；不要提交真实 INI、YAML、CA、迁移文件或凭据。
+; policy_file、ca_bundle（如使用）和 migrations_dir 只可相对于本 INI 的同一安全目录解析，不能使用 ..、绝对路径或链接。
+; direct/env 凭据二选一：本样例使用 env。若改用 direct，则只填写 username + password，删除两个 *_env；两种方式混用或任一半缺失都会被拒绝。
+; policy_file、read_only_environments、require_confirmation 均显式可选，默认关闭：未配置 policy 时服务启动，
+; raw 与 typed 写均按数据库账号权限直接执行。max_result_rows 默认 100，可在此配置或由调用参数覆盖。
+
+[mysql]
+name = qa-mysql
+environment = qa
+host = mysql.example.internal
+port = 3306
+database = autotest
+tls_verify = true
+connect_timeout_seconds = 10
+policy_file = mysql-policy.yaml
+migrations_dir = migrations
+migration_ledger_table = agent_workflow_hub_migrations
+read_only_environments = production,staging
+username_env = MYSQL_USERNAME
+password_env = MYSQL_PASSWORD
+; require_confirmation = false
+; max_result_rows = 100

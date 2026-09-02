@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-workflow-hub.invalid/knowledge-support-agent/agent-config.schema.json",
+  "title": "Knowledge Support Agent Configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "agent_id",
+    "display_name",
+    "purpose",
+    "audiences",
+    "workdir",
+    "sources",
+    "supplemental_skills",
+    "embedding"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "agent_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"},
+    "display_name": {"type": "string", "minLength": 1},
+    "purpose": {"type": "string", "minLength": 1},
+    "audiences": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+    "workdir": {"type": "string", "minLength": 1},
+    "sources": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "type", "repository", "include_code"],
+            "properties": {
+              "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"},
+              "type": {"const": "git"},
+              "repository": {"type": "string", "minLength": 1},
+              "include_code": {"type": "boolean"}
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "type", "path"],
+            "properties": {
+              "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"},
+              "type": {"const": "local-file"},
+              "path": {"type": "string", "minLength": 1}
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "type", "path", "origin_url"],
+            "properties": {
+              "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"},
+              "type": {"const": "collected-document"},
+              "path": {"type": "string", "minLength": 1},
+              "origin_url": {"type": "string", "format": "uri"}
+            }
+          }
+        ]
+      }
+    },
+    "supplemental_skills": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "purpose"],
+        "properties": {
+          "name": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"},
+          "purpose": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "embedding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "base_url", "model", "fallback"],
+      "properties": {
+        "provider": {"const": "ollama"},
+        "base_url": {"type": "string", "format": "uri"},
+        "model": {"const": "qwen3-embedding:0.6b"},
+        "fallback": {"const": "fts"}
+      }
+    }
+  }
+}

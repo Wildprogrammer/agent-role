@@ -1,0 +1,30 @@
+[ssh]
+known_hosts = ../../../workspace/workflows/ssh-operations/known_hosts
+
+[target:linux-example]
+host = 192.0.2.10
+port = 22
+username = tester
+auth = password
+password = replace-me
+sudo_password =
+remote_os = auto
+shell = auto
+forward_agent = false
+timeout_seconds = 15
+
+[target:windows-through-bastion]
+host = 192.0.2.20
+username = tester
+auth = password
+password = replace-me
+; To use a key instead: set auth = key, clear password, and set private_key
+; to an existing file relative to this INI or an absolute path.
+via = linux-example
+remote_os = windows
+shell = powershell
+forward_agent = false
+
+[group:examples]
+targets = linux-example, windows-through-bastion
+max_parallel = 2

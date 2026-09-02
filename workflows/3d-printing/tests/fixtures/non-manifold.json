@@ -1,0 +1,8 @@
+{
+  "fixture": "open-edge-cube",
+  "dimensions_mm": [20, 20, 20],
+  "expected": {
+    "printable": false,
+    "failures": ["non_manifold_edges"]
+  }
+}

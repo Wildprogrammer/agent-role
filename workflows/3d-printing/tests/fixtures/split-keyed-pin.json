@@ -1,0 +1,58 @@
+{
+  "split_requested": true,
+  "reason": "confirmed modular split",
+  "units": "mm",
+  "source_model": "source/model.stl",
+  "connection_strategy": "integrated-keyed-pin",
+  "assembly_filename": "fixture-assembly.3mf",
+  "cuts": [
+    {
+      "id": "neck",
+      "input_piece": "source",
+      "point_mm": [0, 0, 0],
+      "normal": [0, 0, 1],
+      "negative_piece": "body",
+      "positive_piece": "head"
+    }
+  ],
+  "connectors": [
+    {
+      "id": "neck-a",
+      "cut_id": "neck",
+      "type": "integrated-keyed-pin",
+      "male_piece": "head",
+      "female_piece": "body",
+      "center_mm": [0, 0, 0],
+      "axis": [0, 0, -1],
+      "key_direction": [1, 0, 0],
+      "width_mm": 6.0,
+      "height_mm": 4.5,
+      "corner_radius_mm": 1.0,
+      "engagement_mm": 7.0,
+      "root_fillet_mm": 0.8,
+      "tip_chamfer_mm": 0.6,
+      "clearance_per_side_mm": 0.25,
+      "socket_bottom_clearance_mm": 0.5,
+      "minimum_wall_mm": 1.2,
+      "minimum_edge_margin_mm": 1.2
+    }
+  ],
+  "plates": [
+    {
+      "id": "assembly",
+      "piece_ids": ["body", "head"],
+      "layout": [
+        {
+          "piece_id": "body",
+          "position_mm": [0, 0, 0],
+          "rotation_deg": [0, 0, 0]
+        },
+        {
+          "piece_id": "head",
+          "position_mm": [0, 0, 0],
+          "rotation_deg": [0, 0, 0]
+        }
+      ]
+    }
+  ]
+}

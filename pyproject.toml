@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agent-workflow-hub"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+  "httpx>=0.28,<1",
+  "mcp==1.27.2",
+  "PyYAML>=6.0,<7",
+  "packaging>=24,<27",
+  "PyMySQL>=1.2,<2",
+  "sqlglot>=30.14,<31",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0,<9", "Pillow==12.3.0"]
+
+[project.scripts]
+workflow-hub = "agent_workflow_hub.cli:entrypoint"
+
+[tool.pytest.ini_options]
+testpaths = [
+  "workflows/3d-printing/tests",
+  "workflows/meeting-notes/tests",
+  "workflows/daily-assistant/tests",
+  "workflows/bead-pattern/tests",
+  "workflows/information-collection/tests",
+  "workflows/image-ocr/tests",
+  "workflows/jenkins-operations/tests",
+  "workflows/knowledge-support-agent/tests",
+  "workflows/requirements-analysis/tests",
+  "workflows/test-reporting/tests",
+  "workflows/mysql-operations/tests",
+  "workflows/git-operations/tests",
+  "workflows/ssh-operations/tests",
+]
+addopts = "-ra --import-mode=importlib"

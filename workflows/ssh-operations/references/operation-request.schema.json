@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-workflow-hub.local/ssh-operations/operation-request.schema.json",
+  "title": "SSH Operations Request",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["operation"],
+  "properties": {
+    "operation": {"type": "string", "minLength": 1},
+    "request_id": {"type": "string", "minLength": 1},
+    "target": {"type": "string", "minLength": 1},
+    "targets": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+    "command": {"type": "string"},
+    "steps": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "command"],
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "command": {"type": "string", "minLength": 1},
+          "working_directory": {"type": ["string", "null"]},
+          "environment": {"type": "object", "additionalProperties": {"type": "string"}},
+          "depends_on": {"type": "array", "items": {"type": "string"}},
+          "timeout_seconds": {"type": ["number", "null"], "exclusiveMinimum": 0},
+          "sudo": {"type": "boolean"},
+          "use_pty": {"type": "boolean"},
+          "on_failure": {"enum": ["stop", "continue"]}
+        }
+      }
+    },
+    "confirmed_high_impact": {"type": "boolean"},
+    "max_parallel": {"type": "integer", "minimum": 1},
+    "action": {"enum": ["list", "stat", "lstat", "read", "write", "mkdir", "rename", "move", "chmod", "symlink", "readlink", "remove", "rmdir"]},
+    "source": {"type": "string"},
+    "destination": {"type": "string"},
+    "path": {"type": "string"},
+    "mode": {"type": ["string", "integer"]},
+    "content": {"type": "string"},
+    "encoding": {"type": "string"},
+    "overwrite": {"type": "boolean"},
+    "recurse": {"type": "boolean"},
+    "preserve": {"type": "boolean"},
+    "resume": {"type": "boolean"},
+    "listen_host": {"type": "string"},
+    "listen_port": {"type": "integer", "minimum": 0, "maximum": 65535},
+    "destination_host": {"type": "string"},
+    "destination_port": {"type": "integer", "minimum": 1, "maximum": 65535},
+    "sudo": {"type": "boolean"},
+    "timeout_seconds": {"type": "number", "exclusiveMinimum": 0}
+  }
+}

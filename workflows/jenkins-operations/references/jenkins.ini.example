@@ -1,0 +1,57 @@
+; 此 INI 是私密配置：两个工作流都不会输出用户名、Token 或密码。
+; 如果与环境验证工作流共用，保留 [environment] 段。
+[environment]
+name = test
+
+; ============ 旧形态 [jenkins]（兼容；共享形态见文件尾部注释） ============
+; Controller 名称供 jenkins-policy.yaml 的 controllers 字段引用，不是 Jenkins 登录用户名。
+[jenkins]
+name = local
+url = http://127.0.0.1:8085
+
+; 只能是 nonproduction 或 production。production 强制 HTTPS。
+environment = nonproduction
+
+; 相对路径以本 INI 所在目录为基准。policy_file 可选：省略时 Jenkins 账号/RBAC 是默认授权边界。
+policy_file = jenkins-policy.yaml
+
+; 仅非生产 HTTP Controller 可设为 true。HTTPS 时不要填写或设为 false。
+allow_insecure_http = true
+
+; 若使用账号密码且 Jenkins 启用了 CSRF 防护，设为 true 以在每个请求前获取 crumb。
+; API Token 通常不需要 crumb。默认 false。
+require_crumb = false
+
+; 直接凭据方式：username 加 token 或 password；token 和 password 不能同时填写。
+username = jenkins-user
+token = replace-with-jenkins-api-token
+; password = replace-with-account-password
+
+; 环境变量引用方式与所有直接凭据字段互斥。
+; username_env = JENKINS_USERNAME
+; token_env = JENKINS_API_TOKEN
+
+; HTTPS 使用私有 CA 时填写。相对路径以本 INI 所在目录为基准。
+; ca_bundle = certificates\jenkins-ca.pem
+
+; ============ 共享形态 [environment] + [target.jenkins]（推荐，与 [jenkins] 二选一） ============
+; [target.jenkins] 用 host 与 port 组成 URL；host 不写协议时默认 http。
+; HTTPS 可把 host 写成 https://jenkins.example.test。
+; environment 缺省 nonproduction，可显式 production（production 强制 HTTPS）。
+; policy_file 可选：省略时 Jenkins 账号/RBAC 是默认授权边界，读写正常执行。
+; confirm_writes 默认 true（省略即启用）；仅显式 false 时 Jenkins 能力直接执行受控写。
+; 认证可匿名（不填凭据字段）；填写 username + token 或 username + password 时使用该账号。
+; [target.jenkins]
+; host = 127.0.0.1
+; port = 8085
+; environment = nonproduction
+; policy_file = jenkins-policy.yaml
+; allow_insecure_http = true
+; require_crumb = false
+; username = jenkins-user
+; token = replace-with-jenkins-api-token
+; password = replace-with-account-password
+; username_env = JENKINS_USERNAME
+; token_env = JENKINS_API_TOKEN
+; confirm_writes = true
+; ca_bundle = certificates\jenkins-ca.pem
