@@ -23,23 +23,33 @@ Role 2、Role 3 和 Role 4 是按需门，不是每个任务都必须依次执�
 
 ## 安装
 
-从 Agent Role 仓库根目录安装：
+### 让 Agent 安装（推荐）
 
-```powershell
-Copy-Item -Recurse -LiteralPath .\role-gated-development `
-  -Destination "$env:USERPROFILE\.codex\skills\role-gated-development"
+在 Codex 中直接提出：
+
+```text
+请从 https://github.com/Wildprogrammer/role-gated-development 安装 role-gated-development Skill。
 ```
 
-从独立仓库根目录安装时，只复制 Skill 的 12 个发布文件，不复制仓库的 `.git` 元数据：
+Codex 会将完整 Skill 安装到自己的 Skill 目录。安装完成后，在下一轮对话中即可调用。
 
-```powershell
-$destination = "$env:USERPROFILE\.codex\skills\role-gated-development"
-New-Item -ItemType Directory -Path $destination | Out-Null
-Copy-Item -LiteralPath .\LICENSE, .\README.md, .\SKILL.md -Destination $destination
-Copy-Item -Recurse -LiteralPath .\agents, .\assets -Destination $destination
+### 手动安装
+
+下载本仓库，将整个目录放入所用宿主的 Skill 目录，并保证 `SKILL.md` 直接位于 `role-gated-development/` 根目录：
+
+```text
+<skills-root>/
+└── role-gated-development/
+    ├── SKILL.md
+    ├── agents/
+    ├── assets/
+    ├── README.md
+    └── LICENSE
 ```
 
-如果目标目录已经存在，请先自行备份并确认差异，不要直接覆盖正在使用的版本。安装后重新启动或刷新支持 Skill 发现的宿主。
+Codex 的 `<skills-root>` 通常为 `$CODEX_HOME/skills`；未设置 `CODEX_HOME` 时通常为 `~/.codex/skills`。手动安装不需要复制仓库的 `.git` 目录。如果目标目录已经存在，请先比较或备份，不要直接覆盖正在使用的版本。
+
+如果已经使用 [Agent Role](https://github.com/Wildprogrammer/agent-role)，仓库中已包含 `role-gated-development/`，无需重复下载独立仓库；按所用宿主的 Skill 发现方式使用该目录即可。
 
 ## 使用
 
