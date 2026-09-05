@@ -64,7 +64,7 @@ def test_skill_teaches_only_confirmed_behavior_and_ownership_boundaries() -> Non
         "直接写入该 Agent 的 LanceDB",
         "git-operations",
         "information-collection",
-        "specialized-agent-deployment",
+        "用户指定且当前可用的宿主部署能力",
         "仅调用配置中显式选择的补充工作流",
     ):
         assert required in normalized
