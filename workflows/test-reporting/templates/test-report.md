@@ -4,7 +4,7 @@
 
 - 报告标识：`<report-id|run-id>`
 - 生成时间：`<generated-at>`
-- 可选来源扩展行（仅提供 `ReportContext` 时由统一 renderer 追加；模板不是第二 renderer）：`candidate_commit` / `candidate_tree` / `jenkins_evidence_sha256` / `environment_evidence_sha256`
+- lifecycle 扩展行（仅 automated-test-lifecycle 提供 lifecycle 上下文时由统一 renderer 追加；模板不是第二 renderer）：`candidate_commit` / `candidate_tree` / `jenkins_evidence_sha256` / `environment_evidence_sha256`
 
 ## 测试目标与范围
 

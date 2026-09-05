@@ -58,8 +58,9 @@ policy_file 是可选的：省略策略时，Jenkins 账号/RBAC 是默认授权
 提供策略时，策略路径只能引用该 INI 声明的 Controller，并至少限定 Controller、环境级别、
 Item 路径、`read`、`create_item`、`update_item`、`trigger_build`、`cancel_build` 动作、
 模板、可修改字段、参数范围、并发上限与有效期。confirm_writes 默认 true（省略即启用）：写操作
-默认先返回当前会话的挑战/重放确认；仅显式 `confirm_writes = false` 时，Jenkins 能力才在
-Jenkins 账号/RBAC 允许下直接执行受控写。目标环境由 Controller 配置确定，调用方不得自行传入
+默认先返回当前会话的挑战/重放确认；仅显式 `confirm_writes = false` 时，独立 Jenkins 能力才在
+Jenkins 账号/RBAC 允许下直接执行受控写。automated-test-lifecycle 管理的 Jenkins 写要求
+`confirm_writes = true`，显式 false 被拒绝。目标环境由 Controller 配置确定，调用方不得自行传入
 或覆盖；首版不提供批量写操作。
 
 创建 Job 必须提供受支持的类型化模板及其参数。更新必须提供目标路径、允许字段和预期当前摘要；
@@ -110,6 +111,11 @@ Jenkins 版本/插件兼容性和下一步。除非用户明确要求保存，�
 Jenkins MCP 使用项目锁定的 Python 依赖。安装该项目的普通 Python 依赖可遵循项目通用的受控
 `pip`/`uv` 规则；这不授权安装 Jenkins 服务或改写宿主 MCP 映射。
 
+首次使用、迁移宿主或运行环境变更时，完整读取 [运行依赖与接入验证](references/runtime-and-mcp-readiness.md)，
+依次验证所选解释器中的包与入口、MCP 完整握手和工具发现、目标 Agent 的实际只读调用。
+只复制 Skill 目录不会部署 Python 服务或宿主工具映射；不要求 editable 安装或系统 Python。
+依赖约束以所部署版本的 `pyproject.toml` 为唯一来源，部署工作流引用本说明，不另建依赖清单。
+
 ## 系统修改与权限影响
 
 读取不改变 Controller。创建或更新只有在 Jenkins RBAC（以及本地策略，若已配置）均允许时才执行；
@@ -144,8 +150,8 @@ Pipeline definition 更新复用同一个 `jenkins_update_item` 挑战与重放�
 ## 人工确认门
 
 - Gate A：`confirm_writes` 省略即启用（默认 true）；写操作默认需当前会话确认，首次调用只展示
-  脱敏摘要和精确请求 SHA-256。仅显式 `confirm_writes = false` 时在 Jenkins 账号/RBAC
-  允许下直接执行。
+  脱敏摘要和精确请求 SHA-256。独立能力仅显式 `confirm_writes = false` 时在 Jenkins 账号/RBAC
+  允许下直接执行；automated-test-lifecycle 管理路径拒绝 false。
 - Gate P：策略只决定允许或拒绝的范围与风险，不能签发或替代用户确认。策略外、过期、目标不明或
   参数越界时在挑战或消费前停止；若已经提供 ID，该 ID 同时失效。
 - Gate C：任何将来的删除、移动、插件、凭据、节点、全局安全、JCasC reload、重启或脚本请求，
@@ -188,7 +194,7 @@ workflow-hub jenkins-mcp <绝对 INI 路径>
 该命令只启动 stdio 服务，绝不改写 Codex、Hermes、OpenClaw、Claude Code 或 OpenCode 的 MCP 配置。
 `src/agent_workflow_hub/jenkins_mcp/` 是本 Jenkins 工作流的专属自建 MCP 实现；其中多个 Python 模块
 共同组成一个服务，不是项目公共 MCP 池。策略模板位于 `references/jenkins-policy.yaml.example`。
-由用户在目标宿主中创建映射，并只暴露需要的固定类型工具。服务没有原始 HTTP、任意 URL、XML、
+由用户或用户明确授权的部署适配器在目标宿主中创建映射，并只暴露需要的固定类型工具。服务没有原始 HTTP、任意 URL、XML、
 Script Console 或通用 CLI 工具；Groovy 与 Jenkinsfile 只能通过固定的 pipeline 模板参数提交。
 
 所有读取同样受 `read` 策略限制。普通 Job/日志/插件读取使用默认 `item` 作用域；Controller 状态、根目录

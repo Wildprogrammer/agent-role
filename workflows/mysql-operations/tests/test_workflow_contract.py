@@ -47,8 +47,8 @@ def test_mysql_workflow_is_a_standalone_validated_contract() -> None:
     assert json.loads(workflow.metadata["roles"]) == ["roles/mysql-operator.md"]
     assert "独立" in body
     assert "metadata/read" in body
-    assert "只按用户明确提出的数据库任务运行" in body
-    assert "不会被其他工作流隐式调用" in body
+    assert "automated-test-lifecycle" in body
+    assert "不接入" in body
 
     root_skill = (REPOSITORY_ROOT / "SKILL.md").read_text(encoding="utf-8")
     assert "mysql-operations" in root_skill

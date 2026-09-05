@@ -61,6 +61,12 @@ is explicitly approved.
 
 ## 依赖和运行前检查
 
+### 运行入口与部署验证
+
+宿主预检脚本 `scripts/preflight.py` 需要项目支持的 Python 和可导入的 Hub 包（使用 `agent_workflow_hub.frontmatter`）；正式建模/拆件脚本由 Blender 自带 Python 提供 `bpy`/`bmesh`，不是向系统 Python 安装同名包。部署时保留配套 scripts、references 和所选能力资产，只复制 Skill 文本不够。
+
+首次使用或环境变化时，在目标 Agent 命令环境检查预检脚本 `--help`，再按下文以实际 Hub 根目录和应用路径预检。只有切片分支才检查对应切片器；仅导出模型不要求把全部 provider 都安装好。若选择可选 Blender MCP，还需同时具备 Blender 侧桥接/插件和目标宿主映射，并通过实际只读场景查询验证连接；仅发现 MCP 名称不算可用。缺少该通道仍按现有 headless 路径执行，不自动改宿主配置。
+
 `app.blender` 是本工作流的核心能力。`mcp.blender` 是可选的
 MCP-assisted inspection 通道，用于交互式建模、切面预览、候选连通体标色和结果
 视觉复核；正式拆件仍使用 headless Blender。没有 MCP 不阻塞已有网格拆件，改用

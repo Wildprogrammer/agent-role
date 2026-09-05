@@ -59,6 +59,12 @@ python <HUB_ROOT>/workflows/git-operations/scripts/git_operations.py show-file -
 
 ## 依赖和运行前检查
 
+### 运行入口与部署验证
+
+宿主 Agent 需要命令执行能力，以及能访问目标仓库的 Git 身份；本工作流不需要 MCP 服务。使用项目支持的 Python 运行 `scripts/git_operations.py`，并保留其所依赖的 `src/agent_workflow_hub/git_operations/`：在完整 Hub 中脚本会自动定位 `src`，单独复制 Skill 目录不会复制该包，迁移后须让选定解释器能够导入它。
+
+首次使用或环境变化时，在目标 Agent 的实际命令环境中执行 `git --version`、脚本 `--help`，再对指定仓库执行 `status`。这些只验证本地入口和仓库访问；远端读取及推送权限按实际任务分别验证，不能用本地检查代替，也不为探测权限进行试推送。
+
 - 本机可用 git 可执行文件（git --version 成功）。
 - 对已有仓库执行 status/diff/log/add/commit/branch-create/checkout/merge/push 时，仓库路径必须存在且是显式绝对路径；脚本不自动初始化仓库。
 - clone 的 URL 或本地路径由调用方提供，目标目录必须遵循 Git 自身的克隆规则。

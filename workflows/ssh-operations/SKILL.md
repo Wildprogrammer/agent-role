@@ -47,6 +47,12 @@ metadata:
 
 ## 依赖和运行前检查
 
+### 运行入口与部署验证
+
+`scripts/ssh_operations.py` 调用 Hub 的 `agent_workflow_hub.ssh_operations` 包，通过 AsyncSSH 完成 SSH/SFTP/SCP/转发，不要求安装 MCP 服务或本机 OpenSSH CLI。需要项目支持的 Python、`python.asyncssh` 契约规定的运行时及可导入的 Hub 源码包；依赖版本和哈希以该契约及其锁文件为准。只复制 Skill 目录不包含仓库 `src`，部署时应保留完整 Hub 或准备可导入该包的运行环境。
+
+在目标 Agent 实际使用的解释器中先检查脚本 `--help`，再运行下述 `doctor`。真实远端操作另依赖可达的 SSH 服务、有效认证和与目标系统匹配的 shell；SFTP/SCP、sudo、端口转发仅在使用时检查相应服务端支持与权限。doctor 通过不代表已经连通；需要连通验证时执行范围内的只读命令，并如实说明首次 TOFU 会写本地 known-hosts，不以传文件、sudo 或建立转发作为默认健康检查。
+
 先运行 `doctor`，验证绝对配置、目标引用、跳板环、私钥文件、专用 known-hosts 路径和 AsyncSSH 2.24.0。doctor 只读，不建立 SSH 连接。缺少依赖时返回 `needs_dependency`，按 `python.asyncssh` 能力契约在工作流私有运行时中使用哈希锁安装；依赖准备只确认一次，不为 Git、命令或普通写入新增确认。
 
 首次真实连接使用 TOFU：在握手中记录该目标实际地址与端口的 Host Key；同一键后续直接接受，键变化立即拒绝且不覆盖。每个跳板和最终目标分别验证。Agent Forwarding 默认关闭，只有目标明确配置 `forward_agent=true` 时启用。

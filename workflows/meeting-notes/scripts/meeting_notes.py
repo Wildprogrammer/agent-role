@@ -162,7 +162,7 @@ def _voice_import_check(python: Path) -> bool:
 def _voice_timeout_seconds(value: object | None, text_length: int) -> int:
     if value is None:
         num_chunks = max(1, math.ceil(text_length / MAX_CHUNK_CHARS))
-        return max(120, 60 + 30 * num_chunks)
+        return max(900, 60 + 30 * num_chunks)
     if isinstance(value, bool) or not isinstance(value, (int, str)):
         raise ValueError("--timeout-seconds must be a positive integer")
     try:

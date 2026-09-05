@@ -250,7 +250,7 @@ def test_speak_passes_timeout_seconds_to_worker(tmp_path: Path, monkeypatch, cap
     assert captured["timeout"] == 321
 
 
-def test_speak_default_timeout_scales_with_text_length(
+def test_speak_default_timeout_has_900_second_floor_and_scales_with_text_length(
     tmp_path: Path, monkeypatch, capsys
 ):
     monkeypatch.setattr(MEETING, "_voice_import_check", lambda _python: True)
@@ -265,8 +265,10 @@ def test_speak_default_timeout_scales_with_text_length(
     monkeypatch.setattr(MEETING.subprocess, "run", fake_run)
 
     assert MEETING.command_speak(voice_args(tmp_path, "voice-short")) == 0
+    assert MEETING.command_speak(voice_args(tmp_path, "voice-previous-300", text="测试" * 480)) == 0
     assert MEETING.command_speak(voice_args(tmp_path, "voice-long", text="测试" * 600)) == 0
-    assert captured == [120, 360]
+    assert MEETING.command_speak(voice_args(tmp_path, "voice-extra-long", text="测试" * 1800)) == 0
+    assert captured == [900, 900, 900, 960]
 
 
 def test_speak_rejects_invalid_timeout_seconds(tmp_path: Path, monkeypatch, capsys):

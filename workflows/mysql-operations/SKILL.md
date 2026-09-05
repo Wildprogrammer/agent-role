@@ -1,6 +1,6 @@
 ---
 name: mysql-operations
-description: Use when an agent must independently inspect or operate one user-configured MySQL target through the fixed MySQL MCP surface, including mysql_execute_sql raw execution and the typed MySQL tools; policy, read-only environments and write confirmation are explicit optional gates (off by default).
+description: Use when an agent must independently inspect or operate one user-configured MySQL target through the fixed MySQL MCP surface, including mysql_execute_sql raw execution and the typed MySQL tools; policy, read-only environments and write confirmation are explicit optional gates (off by default), and never treat this workflow as part of automated-test-lifecycle.
 compatibility: Agent Workflow Hub spec 1.0; requires the project-locked Python MySQL MCP dependencies and a user-managed, repository-external MySQL INI（可选 YAML policy）.
 metadata:
   spec-version: "1.0"
@@ -23,7 +23,7 @@ metadata:
 
 ## 用途与触发条件
 
-本工作流独立调用受控 MySQL stdio MCP，用于在用户明确授权的单个 MySQL 目标上进行元数据读取、查询、参数化 DML、受控事务、DDL 计划、幂等迁移，以及 `mysql_execute_sql` 的一条或多条标准 MySQL SQL 原样执行。本工作流只按用户明确提出的数据库任务运行，不会被其他工作流隐式调用。
+本工作流独立调用受控 MySQL stdio MCP，用于在用户明确授权的单个 MySQL 目标上进行元数据读取、查询、参数化 DML、受控事务、DDL 计划、幂等迁移，以及 `mysql_execute_sql` 的一条或多条标准 MySQL SQL 原样执行。它不属于也不接入 `automated-test-lifecycle`；不会把测试数据准备、数据库断言或结果保存变成该生命周期的隐式阶段。
 
 每次调用必须给出用户指定的、已经存在的仓库外 INI 绝对路径，以及目标 schema/table、操作意图和预期结果。开始时先调用 `mysql_get_capabilities`，再进行 `metadata/read`：`mysql_list_schemas`、`mysql_list_tables`、`mysql_describe_table`、`mysql_read_query` 或 `mysql_explain_query`。只有读取到配置、可选策略和当前对象状态后，才可以评估任何写入意图。
 
@@ -37,7 +37,7 @@ metadata:
 - 不自动安装或升级 MySQL、驱动、数据库服务、浏览器/宿主映射，也不自动注册或改写 MCP 配置。
 - 不把 policy、read-only environment、写前确认、参数化、单语句、WHERE、影响行数或 SQL 类型白名单变成默认强制门。
 - 不猜测业务表、凭据、缺失连接字段、策略范围、确认结果或测试数据清理方式；不把 connection_string 或凭据写入响应、日志、审计输出或状态文件，也不回显密码、环境变量值、SQL 参数值或完整敏感行。
-- 不签发、延长、替代或恢复其他工作流的确认回执。
+- 不接入 `automated-test-lifecycle`，也不签发、延长、替代或恢复该工作流的任何 Gate。
 
 ## 输入
 
@@ -58,6 +58,12 @@ YAML 是显式可选的收窄来源，不能扩大数据库账号权限，也不
 除非用户明确要求保存，工作流不创建文件。获准保存的非敏感结果仅写入 `workflows/mysql-operations/outputs/<run-id>/`，文件名采用稳定 run ID，且不覆盖既有文件。
 
 ## 依赖和运行前检查
+
+### 运行入口与部署验证
+
+MCP 由 Hub Python 包提供，源码位于 `src/agent_workflow_hub/mysql_mcp/`。用选定解释器启动 `-m agent_workflow_hub.cli mysql-mcp <INI绝对路径>`；需要该解释器内已安装的 `agent-workflow-hub` 及其 `pyproject.toml` 声明的依赖，包括 Python 数据库驱动与 SQL 解析库，不要求本机 mysql CLI。普通安装或 editable 安装均可，不强制系统 Python。只复制 Skill 不会安装该包、数据库服务或宿主 MCP 映射。
+
+首次接入或环境变化时，用同一解释器检查 `-m agent_workflow_hub.cli --help`（包含 `mysql-mcp`）、`-m pip show agent-workflow-hub`、实际模块位置及 `-m pip check`。再用 MCP 客户端完成 initialize、initialized 通知和完整工具发现，确认 `serverInfo.name` 为 `mysql-operations`，结束后关闭测试进程。最后在目标 Agent 中确认工具可见，按下文执行 capabilities 和范围内 metadata/read；独立握手或 capabilities 返回不代表数据库读取已成功。宿主映射由用户或已授权的部署适配器配置，不以依赖检查代替安装/写入授权。
 
 先验证 Hub 根目录和本工作流，再只读检查用户提供的绝对 INI：文件身份、目录非链接、INI/YAML 解析（policy 可选）、路径边界、TLS 选项、direct/env 凭据模式的完整性、迁移目录和账本配置。解析配置不读取或显示凭据值。
 

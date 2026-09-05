@@ -38,6 +38,12 @@ metadata:
 
 ## 依赖和运行前检查
 
+### 运行入口与部署验证
+
+入口为 `scripts/bead_pattern.py`，需要项目支持的 Python 和 `python.pillow` 契约规定的 Pillow；同时保留同目录的 palette、pipeline、runs、render 模块及工作流色板/资源文件。无需 MCP、在线图像服务或另一个 Hub 后端服务。
+
+首次使用或环境变化时，用目标 Agent 的实际解释器检查脚本 `--help`、`PIL` 可导入及版本，再检查本次色板和输入路径。入口能启动不等于图案渲染已验证；`plan`、接受候选和 `render` 会生成或更新运行产物，仅在实际任务指定的输出位置执行，不用来做无写入依赖探测。
+
 先按 `python.pillow` capability 执行只读版本检测，确认 Pillow 满足 `>=12.3.0`。再验证输入文件是单帧 JPG/PNG、路径可读、图像未损坏、像素数在上限内，且所选网格不超过板型上限。缺依赖时只按 capability 的安装契约处理，不以其它安装器或在线服务替代。
 
 ## 系统修改与权限影响

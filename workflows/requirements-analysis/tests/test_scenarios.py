@@ -326,7 +326,7 @@ def test_requirement_version_changes_with_any_reviewed_approval_fact() -> None:
         "任一需求、功能用例、自动化测试设计或来源变化",
         "新的单一版本摘要",
         "重新评审",
-        "不构造、不展示、不确认任何下游工作流的 Gate candidate",
+        "不构造、不展示、不确认任何生命周期 Gate candidate",
     ):
         assert text in body
 

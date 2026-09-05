@@ -66,6 +66,7 @@ agent-role 的 README、工作流说明和相关网页
 | `meeting-notes` | 转写已授权的会议音视频，经人工审核后生成摘要和 Obsidian 会议记录。 | 会议归档、知识沉淀 |
 | `mysql-operations` | 查询或操作用户配置的 MySQL 数据库，并保留数据库自身权限边界。 | 数据核查、业务运维、测试准备 |
 | `requirements-analysis` | 澄清需求歧义，结合授权资料分析需求并生成可评审用例。 | 开发准备、测试设计、方案评审 |
+| `specialized-agent-deployment` | 把一个主工作流及其选定的关联 Skill 固定为可部署的专用 Agent，并适配已有 Hermes 或 DeepSeek Harness 宿主。 | 业务专用 Agent、固定能力组合、宿主部署 |
 | `ssh-operations` | 连接 Windows、macOS 或 Linux 远程设备，执行命令、传输文件和建立端口转发。 | 远程运维、环境检查、日志收集 |
 | `test-reporting` | 把已有测试材料整理为结构统一、可追溯的 Markdown 测试报告。 | 自动化测试、持续集成、质量汇报 |
 
@@ -81,6 +82,7 @@ agent-role 的 README、工作流说明和相关网页
 - “连接配置中的测试服务器，查询服务状态并下载日志。”
 - “根据这个代码仓库和产品文档构建本地知识解答 Agent。”
 - “使用资料采集工作流收集 agent-role 的说明资料，交给知识解答工作流建立知识库，并回答 agent-role 的使用问题。”
+- “把这个主工作流和我选定的辅助 Skill 部署成一个 DeepSeek Harness 专用 Agent。”
 
 用户通常不需要直接运行 `workflows/*/scripts/` 中的脚本；这些脚本是工作流提供给 Agent 的确定性执行接口。
 

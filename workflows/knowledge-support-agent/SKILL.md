@@ -42,6 +42,14 @@ CLI 每次只在 stdout 输出一个 UTF-8 JSON 对象。构建和刷新返回�
 
 ## 依赖和运行前检查
 
+### 运行入口与部署验证
+
+`scripts/knowledge_support_agent.py` 是 Hub 包 `agent_workflow_hub.knowledge_support_agent` 的命令入口，不是独立 RAG 服务或 MCP 服务。需要项目支持的 Python、可导入的 Hub 包及 `python.lancedb` 声明的私有运行时；包依赖以所部署版本的 `pyproject.toml`、能力契约及其锁文件为准。完整 Hub 中脚本会定位 `src`，只迁移 Skill 目录不包含该实现。
+
+按输入选择依赖：Git 来源还需 `git-operations` 的运行条件；DOCX 用 `python-docx`、PDF 用 `pypdf`，纯文本不要求这两项；向量增强需要本地 Ollama 服务和已准备的指定模型，不是全文检索的前置条件。数据库目录还需目标 Agent 可访问的本地存储权限，文件存在不等于已完成索引。
+
+首次使用或环境变化时，用实际解释器执行脚本 `--help` 和配置对应的 `health`。health 检查依赖，并探测配置的本地 Ollama，模型存在时会执行小型 embedding 探测；不代表知识已入库或查询结果正确。`build`、`refresh`、`feedback` 会写数据库，`query` 也可能自动建库或刷新，不能作为默认无写入连通探测。实际入库后再用已知问题核对引用与来源版本。
+
 先运行 `health`。LanceDB 缺失时按 `python.lancedb` 能力契约准备工作流私有运行时；普通查询不得偷偷切换其他数据库。Ollama 与 `qwen3-embedding:0.6b` 是可降级增强：可用时做全文与向量混合检索，不可用时自动降级全文检索。DOCX/PDF 解析依赖只在配置实际使用相应格式时需要。
 
 ## 系统修改与权限影响

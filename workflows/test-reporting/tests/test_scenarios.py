@@ -1,5 +1,6 @@
 import ast
 import os
+import re
 import stat
 import subprocess
 import sys
@@ -17,7 +18,16 @@ WORKFLOW = ROOT / "workflows" / "test-reporting"
 SKILL_PATH = WORKFLOW / "SKILL.md"
 ROLE_PATH = WORKFLOW / "roles" / "test-results-analyst.md"
 TEMPLATE_PATH = WORKFLOW / "templates" / "test-report.md"
-OPTIONAL_CAPABILITY_HEADING = "## Jenkins/JUnit 可选输入能力"
+LIFECYCLE_SKILL_PATH = (
+    ROOT / "workflows" / "automated-test-lifecycle" / "SKILL.md"
+)
+RESULT_CONTRACTS_PATH = (
+    ROOT / "workflows" / "automated-test-lifecycle" / "references"
+    / "result-contracts.md"
+)
+OPTIONAL_CAPABILITY_HEADING = (
+    "## Jenkins/JUnit 可选能力（automated-test-lifecycle 场景）"
+)
 _NON_REPO_DIR_PARTS = frozenset(
     {
         ".codex-remote-attachments",
@@ -34,6 +44,7 @@ _NON_REPO_DIR_PARTS = frozenset(
         "venv",
     }
 )
+_SHIM_MODULE = "agent_workflow_hub.test_lifecycle.reporting"
 _REPORT_AUTHORITY_DEFINITIONS = {
     "ExecutionSummary": "src/agent_workflow_hub/test_reporting/model.py",
     "TestReportModel": "src/agent_workflow_hub/test_reporting/model.py",
@@ -47,8 +58,16 @@ _REPORT_AUTHORITY_DEFINITIONS = {
     "render_test_report": "src/agent_workflow_hub/test_reporting/render.py",
     "report_sha256": "src/agent_workflow_hub/test_reporting/files.py",
 }
+if LIFECYCLE_SKILL_PATH.is_file():
+    _REPORT_AUTHORITY_DEFINITIONS["build_test_report_result"] = (
+        "src/agent_workflow_hub/test_lifecycle/adapters/reporting.py"
+    )
 _LEGACY_DEF_SUBSTRING = "def render_test_report"
 _LEGACY_SCOPE_PREFIX = "src/agent_workflow_hub"
+_LEGACY_IMPORT_RE = re.compile(
+    r"^from\s+(\.+)([\w.]+)\s+import\b",
+    re.MULTILINE,
+)
 
 
 def _load_workflow() -> tuple[dict[str, str], str]:
@@ -264,6 +283,54 @@ def _collect_definitions(root: Path) -> dict[str, list[Path]]:
     return definitions
 
 
+def _package_of(path: Path, root: Path) -> str:
+    parts = list(path.relative_to(root).parts[:-1])
+    if parts and parts[0] == "src":
+        parts = parts[1:]
+    return ".".join(parts)
+
+
+def _import_targets(node: ast.AST, package: str) -> list[str]:
+    """Resolve static Import/ImportFrom statements to dotted module paths."""
+
+    if isinstance(node, ast.Import):
+        return [alias.name for alias in node.names]
+    assert isinstance(node, ast.ImportFrom)
+    base_parts: list[str] = []
+    if node.level:
+        base_parts = package.split(".") if package else []
+        base_parts = base_parts[: max(0, len(base_parts) - (node.level - 1))]
+    module_parts = node.module.split(".") if node.module else []
+    targets = [".".join([*base_parts, *module_parts])]
+    for alias in node.names:
+        if node.module:
+            targets.append(".".join([*base_parts, *module_parts, alias.name]))
+        else:
+            targets.append(".".join([*base_parts, alias.name]))
+    return targets
+
+
+def _shim_import_offenders(root: Path) -> list[tuple[str, str]]:
+    """Return files whose static imports resolve to the retired shim module."""
+
+    offenders: set[tuple[str, str]] = set()
+    for path in _python_files(root):
+        package = _package_of(path, root)
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.Import, ast.ImportFrom)):
+                continue
+            for target in _import_targets(node, package):
+                if target == _SHIM_MODULE:
+                    offenders.add((path.relative_to(root).as_posix(), target))
+    return sorted(offenders)
+
+
+def _legacy_resolved_import(dots: str, module: str, package: str) -> str:
+    base = package.split(".")[: len(package.split(".")) - (len(dots) - 1)]
+    return ".".join([*base, module])
+
+
 def test_core_responsibility_organizes_user_provided_materials() -> None:
     frontmatter, body = _load_workflow()
 
@@ -309,12 +376,13 @@ def test_missing_conflicting_unreadable_materials_marked_honestly() -> None:
     assert "测试通过" in body
 
 
-def test_jenkins_junit_optional_input_keeps_evidence_classification() -> None:
+def test_jenkins_junit_optional_and_lifecycle_invariants_preserved() -> None:
     _, body = _load_workflow()
     section = _optional_capability_section(body)
 
-    assert "可选输入" in body
-    assert "构建状态与测试结论分离" in section
+    assert "可选输入能力" in body
+    assert "automated-test-lifecycle" in section
+    assert "通用路径没有 Gate 3 决策权" in body
     for token in (
         "SUCCESS",
         "TESTS_PASSED",
@@ -329,23 +397,27 @@ def test_jenkins_junit_optional_input_keeps_evidence_classification() -> None:
         assert token in section
     assert "至少一个测试实际执行" in section
     assert "并非全部跳过" in section
+    assert "Gate 3" in section
 
 
 def test_jenkins_junit_classification_precedes_markdown_rendering() -> None:
     _, body = _load_workflow()
     general = body.split(OPTIONAL_CAPABILITY_HEADING, 1)[0]
 
-    assert "统一分类器分类" in general
+    assert "受信适配器分类" in general
     assert "渲染 Markdown" in general
-    assert general.index("统一分类器分类") < general.index("渲染 Markdown")
+    assert general.index("受信适配器分类") < general.index("渲染 Markdown")
 
 
-def test_standalone_markdown_output_and_optional_report_context() -> None:
+def test_standalone_markdown_output_and_lifecycle_only_result() -> None:
     _, body = _load_workflow()
+    section = _optional_capability_section(body)
 
     assert "独立输出 Markdown" in body
-    assert "ReportContext" in body
-    assert "来源字段" in body
+    general = body.split(OPTIONAL_CAPABILITY_HEADING, 1)[0]
+    assert "TestReportResult" not in general
+    assert "TestReportResult" in section
+    assert "仅属于 automated-test-lifecycle" in section
 
 
 def test_template_keeps_exact_nine_sections() -> None:
@@ -381,6 +453,10 @@ def test_report_authority_names_defined_once_repo_wide_by_ast() -> None:
             }
         )
         assert locations == [expected], name
+
+
+def test_lifecycle_python_imports_only_test_reporting_or_reporting_adapter() -> None:
+    assert _shim_import_offenders(ROOT) == []
 
 
 def test_legacy_literal_definition_scan_misses_legal_ast_forms() -> None:
@@ -433,7 +509,88 @@ def test_legacy_src_only_scope_misses_workflow_script_second_renderer() -> None:
         assert locations == ["workflows/sample-workflow/scripts/renderer.py"]
 
 
-def test_docs_role_and_template_declare_single_python_authority() -> None:
+def test_ast_import_guard_rejects_static_shim_import_forms() -> None:
+    sources = {
+        "agent_workflow_hub/test_lifecycle/orchestrator.py": (
+            "from . import reporting\n"
+        ),
+        "agent_workflow_hub/test_lifecycle/adapters/jenkins.py": (
+            "from .. import reporting\n"
+        ),
+        "agent_workflow_hub/test_lifecycle/shim_abs.py": (
+            "import agent_workflow_hub.test_lifecycle.reporting\n"
+        ),
+        "agent_workflow_hub/test_lifecycle/shim_from_abs.py": (
+            "from agent_workflow_hub.test_lifecycle import reporting\n"
+        ),
+    }
+    with TemporaryDirectory() as raw:
+        root = Path(raw)
+        for relative, source in sources.items():
+            path = root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(source, encoding="utf-8")
+        offenders = _shim_import_offenders(root)
+        assert sorted(relative for relative, _ in offenders) == sorted(sources)
+
+
+def test_ast_import_guard_allows_test_reporting_and_adapter_imports() -> None:
+    sources = {
+        "agent_workflow_hub/test_lifecycle/adapters/jenkins.py": (
+            "from ...test_reporting import classify_jenkins_attempt\n"
+        ),
+        "agent_workflow_hub/test_lifecycle/adapters/__init__.py": (
+            "from .reporting import build_test_report_result\n"
+        ),
+        "agent_workflow_hub/test_lifecycle/orchestrator.py": (
+            "from ..test_reporting import JunitEvidence\n"
+        ),
+        "agent_workflow_hub/test_reporting/__init__.py": (
+            "from .render import render_test_report\n"
+        ),
+    }
+    with TemporaryDirectory() as raw:
+        root = Path(raw)
+        for relative, source in sources.items():
+            path = root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(source, encoding="utf-8")
+        assert _shim_import_offenders(root) == []
+
+
+def test_legacy_literal_import_scan_misses_relative_shim_forms() -> None:
+    # ``from . import reporting`` has no module token after the dots, so the
+    # retired regex found no match at all and the old resolver never saw it.
+    assert _LEGACY_IMPORT_RE.findall("from . import reporting\n") == []
+    # ``from .. import reporting`` matched only as a broken ('.', '.') pair
+    # that the old resolver turned into ``<package>.``, never the shim module.
+    matches = _LEGACY_IMPORT_RE.findall("from .. import reporting\n")
+    assert matches == [(".", ".")]
+    resolved = _legacy_resolved_import(
+        matches[0][0],
+        matches[0][1],
+        "agent_workflow_hub.test_lifecycle.adapters",
+    )
+    assert resolved != _SHIM_MODULE
+
+
+def test_dynamic_string_imports_are_outside_static_import_boundary() -> None:
+    # ``importlib.import_module`` with a computed string is not visible to the
+    # static AST Import/ImportFrom guard. The runtime ModuleNotFoundError guard
+    # in tests/test_reporting_equivalence.py covers the deleted module instead.
+    with TemporaryDirectory() as raw:
+        root = Path(raw)
+        probe = root / "dynamic_probe.py"
+        probe.write_text(
+            "import importlib\n"
+            "importlib.import_module('agent_workflow_hub.test_lifecycle.'"
+            " + 'reporting')\n",
+            encoding="utf-8",
+        )
+        assert _shim_import_offenders(root) == []
+
+
+def test_docs_role_and_template_declare_single_python_authority_and_adapter() -> None:
     skill = SKILL_PATH.read_text(encoding="utf-8")
     role = ROLE_PATH.read_text(encoding="utf-8")
     template = TEMPLATE_PATH.read_text(encoding="utf-8")
@@ -445,8 +602,21 @@ def test_docs_role_and_template_declare_single_python_authority() -> None:
     assert "report_sha256" in skill
     assert "扩展行" in skill
     assert "agent_workflow_hub.test_reporting" in role
+    assert "automated-test-lifecycle.reporting-adapter" in role
     assert "扩展行" in template
-    assert "ReportContext" in template
+    assert "automated-test-lifecycle" in template
+    if LIFECYCLE_SKILL_PATH.is_file():
+        lifecycle = LIFECYCLE_SKILL_PATH.read_text(encoding="utf-8")
+        contracts = RESULT_CONTRACTS_PATH.read_text(encoding="utf-8")
+        assert "test-reporting" in lifecycle
+        assert "automated-test-lifecycle.reporting-adapter" in lifecycle
+        assert "字节哈希" in lifecycle
+        assert "integration_review" in lifecycle
+        assert "Gate 3" not in lifecycle
+        assert "1.1" in contracts
+        assert "automated-test-lifecycle.reporting-adapter" in contracts
+        assert "original_capability_producer" in contracts
+        assert "test-reporting" in contracts
     row = next(
         line
         for line in root_body.splitlines()
@@ -472,5 +642,5 @@ def test_role_and_root_catalogue_match_general_responsibility() -> None:
     assert "已有测试材料" in role
     assert "如实标记" in role
     assert "不编造" in role
-    assert "Jenkins/JUnit 是可选材料" in role
-    assert "构建状态与测试结论必须分离" in role
+    assert "TestReportResult" in role
+    assert "仅属于 automated-test-lifecycle" in role

@@ -37,6 +37,12 @@ metadata:
 
 ## 依赖和运行前检查
 
+### 运行入口与部署验证
+
+宿主通过命令执行能力运行 `scripts/ocr_assist.py`，并保留同目录 worker；入口使用 Python 标准库，实际识别依赖所选本地引擎，不需要 MCP 或 Umi-OCR GUI。Umi-OCR 的可执行文件、随包 API 和模型是一套运行资产，不能只复制一个 exe。Python PaddleOCR 备用使用其独立解释器与模型，Tesseract 备用使用可执行文件与语言数据，不要求同时准备三个引擎。
+
+首次使用或环境变化时，用目标 Agent 的实际解释器运行脚本 `--help`，再对选定引擎运行下述 doctor。按对应 capability 验证版本和资产，不另抄版本清单；doctor 通过表示预检通过，识别质量仍需实际任务中的样图结果验证，不能据此声称所有备用引擎均可用。
+
 先运行只读 doctor，并遵循根 `SKILL.md` 的渐进式只读发现：优先使用用户给出的路径和
 `UmiOCR-data/plugins/win7_x64_PaddleOCR-json` 这类随包插件布局候选，再检查常见安装
 目录、别名和快捷方式，最后才在明确目录边界、时间预算和结果上限内按可执行文件名

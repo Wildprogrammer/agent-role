@@ -71,6 +71,18 @@ def _model(**overrides: object) -> TestReportModel:
     return TestReportModel(**base)  # type: ignore[arg-type]
 
 
+def test_domain_package_does_not_import_test_lifecycle() -> None:
+    root = (
+        Path(__file__).resolve().parents[3]
+        / "src"
+        / "agent_workflow_hub"
+        / "test_reporting"
+    )
+    for path in root.rglob("*.py"):
+        source = path.read_text(encoding="utf-8")
+        assert "test_lifecycle" not in source
+
+
 def test_classification_keeps_build_and_pytest_evidence_separate() -> None:
     passed = classify_jenkins_attempt(
         build_result="SUCCESS",
@@ -105,7 +117,7 @@ def test_classification_keeps_build_and_pytest_evidence_separate() -> None:
     assert absent.status == "NO_JENKINS_EVIDENCE"
 
 
-def test_report_context_validates_provenance_sha_shapes() -> None:
+def test_report_context_validates_lifecycle_binding_sha_shapes() -> None:
     assert _context().candidate_commit == _sha40("a")
     assert _context(environment=False).environment_evidence_sha256 == "未提供"
 

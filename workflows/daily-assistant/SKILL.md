@@ -1,6 +1,6 @@
 ---
 name: daily-assistant
-description: Use when a user supplies daily work tasks or explicit progress and needs priority suggestions, local task tracking, a requested daily report, or a local task draft.
+description: Use when a user supplies daily work tasks or explicit progress and needs priority suggestions, local task tracking, a requested daily report, or a local ZenTao task draft.
 compatibility: Agent Workflow Hub spec 1.0; no external capability is required for local planning and report drafting.
 metadata:
   spec-version: "1.0"
@@ -61,6 +61,12 @@ run ID 避免覆盖既有交付物。未提供禅道模板或表头及字段映�
 替换，内容保持短小，不记录每日流水、原文或进展日志。
 
 ## 依赖和运行前检查
+
+### 运行入口与部署验证
+
+主要依赖宿主 Agent 的文件读写和时间信息能力，不需要独立 MCP、数据库或提醒服务。使用 `scripts/` 中的状态、经验和报告辅助函数时，需要项目支持的 Python 并保留同目录辅助模块；这些脚本使用标准库，不是一个需要额外启动的服务，也没有统一 doctor 命令。
+
+部署时检查本地角色、模板和辅助模块是否齐全，以及目标 Agent 能否读取用户提供的运行文件；首次路径尚不存在应标明待初始化，不为验证而覆盖用户数据。只有用户需要定时提醒或外部投递时，才检查宿主实际提供的调度/渠道能力；本工作流不会因复制 Skill 自动获得这些能力，也不默认依赖禅道。
 
 本工作流没有必选外部 capability。开始前只读检查运行时提供的状态缓存路径、
 经验文件路径、时区和可选导入模板；路径不可写、时区未知或模板字段不完整时，
