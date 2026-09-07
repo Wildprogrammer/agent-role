@@ -36,5 +36,6 @@ testpaths = [
   "workflows/mysql-operations/tests",
   "workflows/git-operations/tests",
   "workflows/ssh-operations/tests",
+  "workflows/desktop-client-automation/tests",
 ]
 addopts = "-ra --import-mode=importlib"

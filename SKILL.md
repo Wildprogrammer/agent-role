@@ -72,6 +72,7 @@ The rows below are catalogued workflows. Dynamic validation determines their cur
 | `test-reporting` | Catalogued workflow and the Hub's single Python authority for the report model, classification, Markdown renderer, and UTF-8 byte hash (`agent_workflow_hub.test_reporting`). Organize user-provided existing test materials into a canonical Markdown test report; Jenkins/JUnit are an optional input path, not a requirement. |
 | `mysql-operations` | Catalogued workflow. Independently inspect one externally configured MySQL target through fixed metadata/read, structured DML, and guarded migration tools. |
 | `ssh-operations` | Catalogued workflow. Connect to configured Windows, macOS, or Linux SSH targets to run commands and related steps, manage files through SFTP/SCP, traverse jump hosts, and open explicit port forwarding with TOFU host-key protection and one confirmation only for high-impact operations. |
+| `desktop-client-automation` | Catalogued workflow. Use Cua Driver MCP for cross-host Windows/macOS desktop exploration, preserve Codex native Computer Use as a compatibility path, and optionally compile confirmed Windows paths into Airtest scripts with deterministic replay and visual evidence. |
 
 ## Prepare / bootstrap
 

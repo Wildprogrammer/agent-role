@@ -1,0 +1,81 @@
+{
+  "schema_version": "1.0",
+  "name": "calculator-to-notes",
+  "description": "把计算结果复制到指定笔记客户端并验证最终文本区域。",
+  "source_surface": "cua-driver-mcp",
+  "target_platform": "windows",
+  "effective_path_confirmed": true,
+  "decision": "generate-only",
+  "apps": [
+    {
+      "alias": "calculator",
+      "target_kind": "application",
+      "lifecycle": "restart",
+      "executable": "C:\\Path\\To\\CalculatorApp.exe",
+      "launch_executable": "C:\\Windows\\System32\\calc.exe",
+      "window_process_executable": "C:\\Windows\\System32\\ApplicationFrameHost.exe",
+      "launch_args": [],
+      "window_title_regex": "^计算器$",
+      "startup_timeout_seconds": 30,
+      "shutdown_timeout_seconds": 10,
+      "force_terminate": true
+    },
+    {
+      "alias": "notes",
+      "target_kind": "application",
+      "lifecycle": "reuse",
+      "executable": "C:\\Path\\To\\Notes.exe",
+      "launch_args": [],
+      "window_title_regex": ".*笔记.*",
+      "startup_timeout_seconds": 30,
+      "shutdown_timeout_seconds": 10,
+      "force_terminate": false
+    }
+  ],
+  "parameters": [
+    {"name": "expression", "kind": "text", "default": "123+456", "sensitive": false}
+  ],
+  "steps": [
+    {
+      "id": "enter_expression",
+      "app": "calculator",
+      "action": "type-text",
+      "effect": "none",
+      "text": "${expression}",
+      "retries": 0,
+      "timeout_seconds": 10
+    },
+    {
+      "id": "calculate",
+      "app": "calculator",
+      "action": "press-key",
+      "effect": "read",
+      "key": "ENTER",
+      "retries": 0,
+      "timeout_seconds": 10
+    },
+    {
+      "id": "copy_result",
+      "app": "calculator",
+      "action": "copy-text",
+      "effect": "read",
+      "retries": 1,
+      "timeout_seconds": 10
+    },
+    {
+      "id": "paste_result",
+      "app": "notes",
+      "action": "paste-text",
+      "effect": "idempotent",
+      "retries": 0,
+      "timeout_seconds": 10
+    }
+  ],
+  "success_assertion": {
+    "app": "notes",
+    "template": "C:\\absolute\\staging\\success.png",
+    "threshold": 0.85,
+    "timeout_seconds": 20,
+    "stable_seconds": 1
+  }
+}

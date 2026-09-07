@@ -1,0 +1,125 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/agent-workflow-hub/desktop-client-automation/automation-request.schema.json",
+  "title": "Desktop client automation confirmed trace",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "name",
+    "description",
+    "source_surface",
+    "target_platform",
+    "apps",
+    "steps",
+    "success_assertion",
+    "decision",
+    "effective_path_confirmed"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "name": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$"},
+    "description": {"type": "string", "minLength": 1},
+    "source_surface": {
+      "enum": [
+        "codex-desktop-native-windows-computer-use",
+        "cua-driver-mcp"
+      ]
+    },
+    "target_platform": {"const": "windows"},
+    "effective_path_confirmed": {"const": true},
+    "decision": {"enum": ["generate-only", "generate-and-replay"]},
+    "apps": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/app"}
+    },
+    "parameters": {
+      "type": "array",
+      "default": [],
+      "items": {"$ref": "#/$defs/parameter"}
+    },
+    "steps": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/step"}
+    },
+    "success_assertion": {"$ref": "#/$defs/assertion"}
+  },
+  "$defs": {
+    "identifier": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$"},
+    "app": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["alias", "target_kind", "lifecycle", "window_title_regex"],
+      "properties": {
+        "alias": {"$ref": "#/$defs/identifier"},
+        "target_kind": {"enum": ["application", "system-dialog"]},
+        "lifecycle": {"enum": ["restart", "reuse", "attach-only"]},
+        "executable": {"type": ["string", "null"]},
+        "launch_executable": {"type": ["string", "null"]},
+        "window_process_executable": {"type": ["string", "null"]},
+        "launch_args": {"type": "array", "items": {"type": "string"}, "default": []},
+        "window_title_regex": {"type": "string", "minLength": 1},
+        "startup_timeout_seconds": {"type": "number", "exclusiveMinimum": 0},
+        "shutdown_timeout_seconds": {"type": "number", "exclusiveMinimum": 0},
+        "force_terminate": {"type": "boolean", "default": false}
+      }
+    },
+    "parameter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": {"$ref": "#/$defs/identifier"},
+        "kind": {"enum": ["text", "path"], "default": "text"},
+        "default": {"type": ["string", "null"]},
+        "sensitive": {"type": "boolean", "default": false}
+      }
+    },
+    "step": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "app", "action", "effect"],
+      "properties": {
+        "id": {"$ref": "#/$defs/identifier"},
+        "app": {"$ref": "#/$defs/identifier"},
+        "action": {
+          "enum": [
+            "click-image", "double-click-image", "right-click-image",
+            "click-coordinate", "type-text", "press-key", "hotkey", "scroll",
+            "drag-image", "wait-image", "copy-text", "paste-text", "manual-step"
+          ]
+        },
+        "effect": {"enum": ["none", "read", "idempotent", "create", "submit", "send", "delete", "unknown"]},
+        "optional": {"type": "boolean", "default": false},
+        "retries": {"type": "integer", "minimum": 0, "maximum": 5, "default": 0},
+        "timeout_seconds": {"type": "number", "exclusiveMinimum": 0},
+        "template": {"type": "string"},
+        "threshold": {"type": "number", "exclusiveMinimum": 0, "maximum": 1},
+        "x": {"type": "integer", "minimum": 0},
+        "y": {"type": "integer", "minimum": 0},
+        "text": {"type": "string"},
+        "key": {"type": "string", "minLength": 1},
+        "keys": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+        "direction": {"enum": ["up", "down"]},
+        "amount": {"type": "integer", "minimum": 1, "maximum": 100},
+        "from_template": {"type": "string"},
+        "to_template": {"type": "string"},
+        "description": {"type": "string", "minLength": 1}
+      }
+    },
+    "assertion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["app", "template"],
+      "properties": {
+        "app": {"$ref": "#/$defs/identifier"},
+        "template": {"type": "string"},
+        "threshold": {"type": "number", "exclusiveMinimum": 0, "maximum": 1},
+        "timeout_seconds": {"type": "number", "exclusiveMinimum": 0},
+        "stable_seconds": {"type": "number", "exclusiveMinimum": 0}
+      }
+    }
+  }
+}
