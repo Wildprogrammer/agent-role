@@ -11,6 +11,17 @@ from agent_workflow_hub.repository import REQUIRED_HEADINGS, validate_skill
 
 SKILL = Path(__file__).resolve().parents[1] / "SKILL.md"
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
+README = REPOSITORY_ROOT / "README.md"
+
+
+def test_public_readme_lists_desktop_client_automation() -> None:
+    body = README.read_text(encoding="utf-8")
+    assert "| `desktop-client-automation` |" in body
+
+
+def test_public_readme_includes_desktop_automation_example() -> None:
+    body = README.read_text(encoding="utf-8")
+    assert "把确认后的 Windows 操作路径固化为 Airtest 回放" in body
 
 
 def test_cua_driver_capability_is_pinned_and_cross_platform() -> None:

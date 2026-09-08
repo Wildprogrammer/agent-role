@@ -58,6 +58,7 @@ agent-role 的 README、工作流说明和相关网页
 | `3d-printing` | 设计、检查、拆分和切片 3D 打印模型，交付经检查的打印文件。 | 产品建模、制造准备 |
 | `bead-pattern` | 把本地图片转换为固定色板的拼豆图纸。 | 图像处理、手工作品设计 |
 | `daily-assistant` | 整理每日任务和进度，给出优先级建议并生成本地工作记录。 | 日程管理、工作汇报 |
+| `desktop-client-automation` | 使用 Cua Driver 或宿主原生 Computer Use 探索 Windows、macOS 桌面客户端，并可把确认后的 Windows 操作路径固化为 Airtest 回放。 | 桌面客户端操作、跨平台探索、Windows 自动化回放 |
 | `git-operations` | 查看和操作 Git 仓库，包括提交快照读取、分支、提交、合并和推送。 | 代码开发、持续集成、发布流程 |
 | `image-ocr` | 使用本地 OCR 从图片中提取按阅读顺序排列的文本。 | 文档采集、资料数字化 |
 | `information-collection` | 采集、筛选和总结指定网页资料，并按需生成交付文件。 | 调研、知识库建设、需求分析 |
@@ -81,6 +82,7 @@ agent-role 的 README、工作流说明和相关网页
 - “连接配置中的测试服务器，查询服务状态并下载日志。”
 - “根据这个代码仓库和产品文档构建本地知识解答 Agent。”
 - “使用资料采集工作流收集 agent-role 的说明资料，交给知识解答工作流建立知识库，并回答 agent-role 的使用问题。”
+- “打开指定桌面客户端完成操作；原生 Computer Use 不可用时使用 Cua Driver 探索，并把确认后的 Windows 操作路径固化为 Airtest 回放。”
 
 用户通常不需要直接运行 `workflows/*/scripts/` 中的脚本；这些脚本是工作流提供给 Agent 的确定性执行接口。
 
