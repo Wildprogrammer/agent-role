@@ -90,6 +90,61 @@ def test_loads_confirmed_cross_app_request(tmp_path: Path) -> None:
     assert request.success_assertion.stable_seconds == 1
 
 
+def test_loads_primary_desktop_target(tmp_path: Path) -> None:
+    path, value = _request(tmp_path)
+    value["apps"][0] = {  # type: ignore[index]
+        "alias": "desktop",
+        "target_kind": "desktop",
+        "lifecycle": "attach-only",
+        "display_id": "primary",
+    }
+    value["steps"][0]["app"] = "desktop"  # type: ignore[index]
+    value["steps"][1]["app"] = "desktop"  # type: ignore[index]
+    value["success_assertion"]["app"] = "desktop"  # type: ignore[index]
+    path.write_text(json.dumps(value), encoding="utf-8")
+
+    request = load_request(path)
+
+    desktop = request.apps[0]
+    assert desktop.target_kind == "desktop"
+    assert desktop.display_id == "primary"
+    assert desktop.window_title_regex is None
+    assert desktop.executable is None
+
+
+@pytest.mark.parametrize(
+    ("field", "invalid", "message"),
+    [
+        ("lifecycle", "reuse", "desktop must be attach-only"),
+        ("display_id", "secondary", "display_id must equal primary"),
+        ("executable", r"C:\Apps\demo.exe", "desktop must omit"),
+        ("window_title_regex", "^Program Manager$", "desktop must omit"),
+    ],
+)
+def test_rejects_invalid_desktop_target(
+    tmp_path: Path,
+    field: str,
+    invalid: object,
+    message: str,
+) -> None:
+    path, value = _request(tmp_path)
+    desktop: dict[str, object] = {
+        "alias": "desktop",
+        "target_kind": "desktop",
+        "lifecycle": "attach-only",
+        "display_id": "primary",
+    }
+    desktop[field] = invalid
+    value["apps"][0] = desktop  # type: ignore[index]
+    value["steps"][0]["app"] = "desktop"  # type: ignore[index]
+    value["steps"][1]["app"] = "desktop"  # type: ignore[index]
+    value["success_assertion"]["app"] = "desktop"  # type: ignore[index]
+    path.write_text(json.dumps(value), encoding="utf-8")
+
+    with pytest.raises(ContractError, match=message):
+        load_request(path)
+
+
 @pytest.mark.parametrize(
     "source_surface",
     [

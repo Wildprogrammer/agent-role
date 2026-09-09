@@ -14,7 +14,7 @@ metadata:
   required-capabilities: '["mcp.cua-driver"]'
   config-templates: '{}'
   config-requirements: '{}'
-  entrypoints: '{"doctor":"python <HUB_ROOT>/workflows/desktop-client-automation/scripts/desktop_client_automation.py doctor --host <HOST> --mode <MODE> --cua-mcp <STATUS> --native-computer-use <STATUS>","capture":"python <HUB_ROOT>/workflows/desktop-client-automation/scripts/desktop_client_automation.py capture --window-title-regex <REGEX> --output <ABSOLUTE_PNG> [--x N --y N --width N --height N]","locate-image":"python <HUB_ROOT>/workflows/desktop-client-automation/scripts/desktop_client_automation.py locate-image --window-title-regex <REGEX> --template <ABSOLUTE_IMAGE> [--threshold 0.8 --timeout-seconds 10]","click-image":"python <HUB_ROOT>/workflows/desktop-client-automation/scripts/desktop_client_automation.py click-image --window-title-regex <REGEX> --template <ABSOLUTE_IMAGE> --evidence-dir <ABSOLUTE_DIRECTORY> --action-id <LOWERCASE_ID> [--threshold 0.8 --timeout-seconds 10]","compile":"python <HUB_ROOT>/workflows/desktop-client-automation/scripts/desktop_client_automation.py compile --request <ABSOLUTE_JSON> --output-root <ABSOLUTE_DIRECTORY>","replay":"python <HUB_ROOT>/workflows/desktop-client-automation/scripts/desktop_client_automation.py replay --bundle <ABSOLUTE_AIR_DIRECTORY>"}'
+  entrypoints: '{"doctor":"python <HUB_ROOT>/workflows/desktop-client-automation/scripts/desktop_client_automation.py doctor --host <HOST> --mode <MODE> --cua-mcp <STATUS> --native-computer-use <STATUS>","capture":"python <HUB_ROOT>/workflows/desktop-client-automation/scripts/desktop_client_automation.py capture [--window-title-regex <REGEX> OR --desktop --display-id primary] --output <ABSOLUTE_PNG> [--x N --y N --width N --height N]","locate-image":"python <HUB_ROOT>/workflows/desktop-client-automation/scripts/desktop_client_automation.py locate-image [--window-title-regex <REGEX> OR --desktop --display-id primary] --template <ABSOLUTE_IMAGE> [--threshold 0.8 --timeout-seconds 10]","click-image":"python <HUB_ROOT>/workflows/desktop-client-automation/scripts/desktop_client_automation.py click-image [--window-title-regex <REGEX> OR --desktop --display-id primary] --template <ABSOLUTE_IMAGE> --evidence-dir <ABSOLUTE_DIRECTORY> --action-id <LOWERCASE_ID> [--threshold 0.8 --timeout-seconds 10]","compile":"python <HUB_ROOT>/workflows/desktop-client-automation/scripts/desktop_client_automation.py compile --request <ABSOLUTE_JSON> --output-root <ABSOLUTE_DIRECTORY>","replay":"python <HUB_ROOT>/workflows/desktop-client-automation/scripts/desktop_client_automation.py replay --bundle <ABSOLUTE_AIR_DIRECTORY>"}'
   supported-hosts: '["codex","openclaw","claude-code","hermes","opencode"]'
 ---
 
@@ -37,7 +37,7 @@ Codex、OpenClaw、Claude Code、Hermes 或 OpenCode 只有在当前任务实际
 
 ## 输入
 
-探索输入是用户的自然语言任务、明确目标应用及允许的外部影响。Agent 先建立应用清单；每个 `application` 声明用于生命周期和进程精确绑定的绝对 `executable`、窗口标题正则和 `restart|reuse|attach-only` 生命周期。Windows 打包应用等需要通过单独入口启动时，可额外声明绝对 `launch_executable`；可见窗口由宿主进程承载时，可声明绝对 `window_process_executable`。两者未声明时均默认使用 `executable`。相关 Windows 文件选择框等声明为 `target_kind=system-dialog` 且固定 `attach-only`，不启动、重启或强杀。
+探索输入是用户的自然语言任务、明确目标应用及允许的外部影响。Agent 先建立应用清单；每个 `application` 声明用于生命周期和进程精确绑定的绝对 `executable`、窗口标题正则和 `restart|reuse|attach-only` 生命周期。Windows 打包应用等需要通过单独入口启动时，可额外声明绝对 `launch_executable`；可见窗口由宿主进程承载时，可声明绝对 `window_process_executable`。两者未声明时均默认使用 `executable`。相关 Windows 文件选择框等声明为 `target_kind=system-dialog` 且固定 `attach-only`，不启动、重启或强杀。用户明确要求操作可见桌面时，单独声明 `target_kind=desktop`、`lifecycle=attach-only`、`display_id=primary`，并省略可执行文件和窗口标题；桌面目标不等同于 Explorer 窗口。
 
 固化输入是绝对路径 JSON，结构见 `references/automation-request.schema.json`。它只接收经过清理并由用户确认的有效步骤；误点、回退、重复等待、试探窗口切换不得进入。图片步骤引用已存在的绝对 PNG/JPEG；动态普通文本使用具名参数，固定文本可直接保留，敏感文本只能成为 `manual-step`，不得带默认值。
 
@@ -68,6 +68,8 @@ Codex、OpenClaw、Claude Code、Hermes 或 OpenCode 只有在当前任务实际
 5. 默认使用后台投递。只有 Cua 返回结构化拒绝或已经观察到动作未送达，才对当前动作切换前台投递，不把前台模式设成全局默认。
 6. 动作后再次调用 `get_window_state` 验证业务结果；结果未知时只对账，不重复有副作用动作。动作返回 `unverifiable` 或建议升级前台，但新鲜后置状态已确认业务结果时不得前台重试。嵌入式 WebView 的 `verify_state` 可能返回 `unknown_reason=untrusted_source`；该值既不是成功也不是失败，必须把同次窗口截图、URL 或文档值、输入框值和结果锚点一起保存并如实记录判断依据。
 
+显式桌面目标不通过 `list_windows` 或窗口 UIA 绑定。Agent 使用同一会话中的 `get_desktop_state` 获取主显示器新鲜截图，再把该截图中观察到的坐标发送给目标 `{kind:"desktop",display_id:"primary"}`。Cua Driver 0.23.2 的桌面双击使用一次 `click` 且传入 `count=2`；不得把两次独立点击当成双击，也不得复用旧截图坐标。桌面动作只在桌面确实可见且未被其他窗口遮挡时执行，不主动发送 `Win+D`。这一动态桌面路径在 Windows 和 macOS 均可用，仍以当前 Cua 工具实际暴露的能力为准。
+
 ### Codex 原生 Computer Use 兼容与排障（非永久强制条件）
 
 截至 2026-09-06，若 Cua MCP 不可用但需要使用 Codex 原生兼容路径，且 Codex 桌面任务没有提供 Windows 原生应用 surface，优先按 [OpenAI Computer Use 官方说明](https://learn.chatgpt.com/zh-Hans/docs/computer-use) 检查以下当前产品路径：
@@ -78,22 +80,27 @@ Codex、OpenClaw、Claude Code、Hermes 或 OpenCode 只有在当前任务实际
 
 这是当前版本的推荐启用与排障路径，不是工作流的永久调用语法，也不要求每次运行都重新安装插件或必须重复使用 `@电脑`。Cua MCP 已可用时不要求安装或提及 `@电脑`。Codex 后续版本可能自动载入该能力、改变入口或调整提及方式；兼容路径始终以当前任务实际暴露的 Windows 原生应用 surface 为准。surface 已可用时直接继续，不因缺少上述操作记录而阻塞；surface 不可用时先向用户给出这一路径，不要在载入条件没有变化时反复分叉或创建任务。
 
-### 动态控制异常时的条件式 Airtest 识图（Windows）
+### Airtest 原生桌面与条件式窗口识图（Windows）
 
-正常探索始终优先使用 Cua MCP；Codex 原生 Computer Use 处于兼容路径。两者能够读取和操作目标控件时，不要求启用 Airtest 单步识图。只有已观察到 WebView/UIA/AX 无法提供可信元素动作，或宿主截图/坐标能力明确报错，例如 `coordinate input geometry is unavailable`、`SetIsBorderRequired failed: 不支持此接口 (0x80004002)`，并且当前是 Windows，才使用以下条件式替代路径。已有模板的固定验收流程则直接使用 Airtest。未来 Cua、Codex 或 Computer Use 修复相关行为后，动态探索可继续使用首选路径；这些错误字符串不是永久触发协议。
+正常探索始终优先使用 Cua MCP；Codex 原生 Computer Use 处于兼容路径。两者能够读取和操作目标控件时，不要求启用 Airtest 单步识图。窗口目标只有在已观察到 WebView/UIA/AX 无法提供可信元素动作，或宿主截图/坐标能力明确报错，例如 `coordinate input geometry is unavailable`、`SetIsBorderRequired failed: 不支持此接口 (0x80004002)`，并且当前是 Windows，才使用条件式 Airtest 识图。显式桌面目标和已有模板的固定验收流程可直接使用 Airtest：`Windows:///` 是无 HWND 的原生 Windows 桌面设备，不是模拟兜底。未来 Cua、Codex 或 Computer Use 修复相关行为后，窗口动态探索可继续使用首选路径；这些错误字符串不是永久触发协议。
 
-1. 用窗口标题正则绑定唯一可见的目标顶层窗口并将其置前。多窗口、窗口被遮挡、窗口最小化，或截图不是当前目标窗口的清晰画面时停止；不得从桌面、其他应用、黑屏或被遮挡截图制作模板。
-2. 用 `capture` 保存当前目标窗口的绝对 PNG，再从该图裁剪小而稳定的目标模板。模板应包含足够辨识度，避开头像、计数、时间、轮播图和其他动态内容。
+1. 窗口模式用窗口标题正则绑定唯一可见的目标顶层窗口并将其置前；桌面模式用 `--desktop --display-id primary` 明确绑定主显示器桌面。桌面必须已由用户显示在前台；被应用遮挡时返回 `desktop-not-foreground`，不得发送 `Win+D` 改变用户布局。桌面模式不要求 UIA，也不依赖 Explorer ListView 语义定位。
+2. 用 `capture` 保存所选目标的绝对 PNG，再从该图裁剪小而稳定的模板。窗口模板只能来自所选窗口截图，桌面模板只能来自显式桌面截图；不得跨目标复用截图，也不得从黑屏或被遮挡画面制作模板。模板应包含足够辨识度，避开头像、计数、时间、轮播图和其他动态内容。
 3. 先运行只读的 `locate-image` 验证模板和阈值。它每次绑定窗口并执行一次新的 Airtest 匹配，只报告本次位置；不得把位置保存后给后续命令复用。
 4. 定位通过后运行 `click-image`。它先检查全部输入和证据文件冲突，保存 `<action-id>-before.png`，重新匹配当前画面，只点击新匹配中心一次，等待界面稳定，再保存 `<action-id>-after.png`。
 5. `not-found` 时只保留 before 证据、不点击、不生成 after。图片识别失败不得静默回退到历史坐标、猜测坐标或 Computer Use 坐标点击；需要坐标动作时必须由工作流显式声明 `click-coordinate`。
 6. 登录、验证码、凭据和其他身份验证仍交给用户手工完成；识图兜底不扩大原任务授权，也不绕过 Computer Use 或宿主的确认策略。
+
+桌面回放每次都在主显示器的新鲜截图中要求唯一匹配，不保存探索坐标。`click-coordinate` 的值是主显示器局部坐标，运行时会换算为 Airtest 虚拟桌面图像坐标后再输入；桌面右键使用 `touch(..., right_click=True)`，图片拖拽使用 `swipe`，均不发送未经换算的 pywinauto 坐标。最终断言也在新鲜主显示器截图中重新唯一匹配；应用打开后可以遮住 Shell，因此最终断言不要求桌面 Shell 继续位于前台。
 
 一次性命令示例：
 
 ```powershell
 python <HUB_ROOT>/workflows/desktop-client-automation/scripts/desktop_client_automation.py locate-image --window-title-regex 'BambuStudio' --template 'C:\absolute\target.png' --threshold 0.8 --timeout-seconds 10
 python <HUB_ROOT>/workflows/desktop-client-automation/scripts/desktop_client_automation.py click-image --window-title-regex 'BambuStudio' --template 'C:\absolute\target.png' --evidence-dir 'C:\absolute\evidence' --action-id 'open-favorite' --threshold 0.8 --timeout-seconds 10
+python <HUB_ROOT>/workflows/desktop-client-automation/scripts/desktop_client_automation.py capture --desktop --display-id primary --output 'C:\absolute\desktop.png'
+python <HUB_ROOT>/workflows/desktop-client-automation/scripts/desktop_client_automation.py locate-image --desktop --display-id primary --template 'C:\absolute\desktop-icon.png' --threshold 0.85 --timeout-seconds 10
+python <HUB_ROOT>/workflows/desktop-client-automation/scripts/desktop_client_automation.py click-image --desktop --display-id primary --template 'C:\absolute\desktop-icon.png' --evidence-dir 'C:\absolute\evidence' --action-id 'select-desktop-icon' --threshold 0.85 --timeout-seconds 10
 ```
 
 Airtest 使用 `python.airtest` 能力契约和 `workspace/workflows/desktop-client-automation/runtime/` 下的工作流私有 CPython 3.11 运行时。先以 `uv venv` 创建该目录，再按完整哈希锁安装；启动脚本发现该解释器后会整进程切换过去，绝不把 3.11 的 `site-packages` 注入系统 Python。AirtestIDE 不是依赖；系统 Python 3.13 与 Airtest 1.4.3 的锁定 NumPy/OpenCV 组合不兼容时不得强装。只复制 Skill 目录不包含 Hub 编译器和私有运行时。
@@ -110,12 +117,12 @@ Airtest 使用 `python.airtest` 能力契约和 `workspace/workflows/desktop-cli
 
 1. 从当前工具清单检查 Cua MCP 与 Codex 原生 surface，再按目标运行 `doctor --mode explore|replay|full`；任何所需能力不满足都不宣称可执行。Cua 二进制存在不等于 MCP 已连接。
 2. 根据用户任务建立跨应用清单、各自生命周期、窗口选择和初始页面。身份验证页由用户手工完成，Agent 重新绑定后继续。
-3. Cua 每次按 `list_windows → get_window_state → 一个动作 → get_window_state` 执行；兼容的 Computer Use 也必须依据最新窗口状态。执行动作前保存可固化步骤所需的窗口图片或目标区域，记录应用别名、动作参数和前后状态。
+3. Cua 窗口目标每次按 `list_windows → get_window_state → 一个动作 → get_window_state` 执行；桌面目标按 `get_desktop_state → 一个桌面动作 → get_desktop_state` 执行。兼容的 Computer Use 也必须依据最新目标状态。执行动作前保存可固化步骤所需的目标图片或区域，记录应用别名、动作参数和前后状态。
 4. 观察结果未知时先只读刷新和对账，不重复触发可能有副作用的动作。有限重试只用于识图等待、窗口激活、无副作用导航和已证明未提交的输入。
 5. Agent 观察到用户目标后，选择目标窗口中的稳定区域作为最终断言，记录必须出现的锚点、阈值、超时和稳定时长；动态区域不进入模板。
 6. 从完整探索轨迹删除误点、回退和重复动作，生成有效步骤摘要、应用生命周期、动态参数、最终断言、总副作用等级和回放影响。
 7. 向用户一次展示并询问：不固化、仅生成、生成并回放。该确认只决定本次是否生成产物及是否立即验证回放，不追溯授权已经发生的探索操作，也不永久禁止用户以后手工回放已生成脚本。
-8. 用户选择生成 Windows Airtest 产物时写入确认后的 JSON 并运行 `compile`。图片步骤失败即停止；只有显式 `click-coordinate` 使用窗口相对坐标。macOS 请求生成或回放时返回 `needs-replay-backend`。
+8. 用户选择生成 Windows Airtest 产物时写入确认后的 JSON 并运行 `compile`。图片步骤失败即停止；只有显式 `click-coordinate` 使用坐标，窗口目标采用窗口相对坐标，桌面目标采用主显示器局部坐标。macOS 可由 Cua 动态操作桌面，但请求生成或回放 Airtest 产物时返回 `needs-replay-backend`。
 9. 对普通查询和可证明幂等流程，用户选择固化后可自动回放。创建、提交、发送、删除或未知流程按用户同一次选择执行“仅生成”或“生成并回放”。
 10. 回放时按应用策略关闭、启动或绑定应用，导航到初始页面，执行线性主流程、可选步骤和有限重试，最后要求用户确认的最终锚点持续可见。输出实际状态和证据。
 
@@ -166,6 +173,7 @@ Cua 未安装返回 `needs-cua-driver`，二进制存在但当前宿主未暴露
 - macOS 第一阶段不支持 Airtest 桌面回放，必须如实返回 `needs-replay-backend`。
 - 能记录并清理跨应用有效路径，普通文本参数化，敏感输入不落盘。
 - `restart/reuse/attach-only` 与 `application/system-dialog` 语义分离；强杀只作用于唯一精确实例。
+- `desktop` 目标只绑定 `display_id=primary`，前台未显示或匹配不唯一时停止，不发送 `Win+D`，且每次回放重新定位而不使用探索坐标。
 - 图片锚点失败不静默点击坐标；坐标步骤必须显式。
 - 重试不重复结果未知或有副作用的动作。
 - 用户一次确认覆盖固化及回放选择；未回放脚本保持 `generated-unverified`。

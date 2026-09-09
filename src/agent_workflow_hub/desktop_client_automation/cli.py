@@ -9,10 +9,10 @@ import sys
 from pathlib import Path
 from typing import Sequence
 
-from .airtest_runtime import RuntimeFailure, _focus_window, _uia_windows, run_bundle
+from .airtest_runtime import RuntimeFailure, _uia_windows, run_bundle
 from .contracts import ContractError, load_request
 from .cua_runtime import probe_cua_driver
-from .exploration import click_image, locate_image
+from .exploration import capture_target, click_image, locate_image
 from .readiness import evaluate_readiness
 from .renderer import compile_bundle
 
@@ -45,6 +45,14 @@ def _version(distribution: str) -> str | None:
 
 def _print(value: dict[str, object]) -> None:
     print(json.dumps(value, ensure_ascii=False))
+
+
+def _image_target(args: argparse.Namespace) -> tuple[bool, str | None]:
+    desktop = bool(getattr(args, "desktop", False))
+    display_id = getattr(args, "display_id", None)
+    if desktop and display_id is None:
+        display_id = "primary"
+    return desktop, display_id
 
 
 def _airtest_runtime_status(
@@ -134,28 +142,23 @@ def _compile(args: argparse.Namespace) -> int:
 
 
 def _capture(args: argparse.Namespace) -> int:
-    output = Path(args.output)
-    if not output.is_absolute() or output.suffix.casefold() != ".png":
-        raise ContractError("capture output must be an absolute PNG path")
-    if output.exists():
-        raise ContractError("capture output already exists")
-    windows = _uia_windows(title_re=args.window_title_regex, visible_only=True)
-    if len(windows) != 1:
-        raise ContractError(
-            f"capture requires exactly one matching window; found {len(windows)}"
-        )
-    window = windows[0]
-    _focus_window(window)
-    image = window.capture_as_image()
-    if args.width is not None or args.height is not None:
-        if None in {args.x, args.y, args.width, args.height}:
+    crop_values = (args.x, args.y, args.width, args.height)
+    if any(value is not None for value in crop_values):
+        if any(value is None for value in crop_values):
             raise ContractError("capture crop requires x, y, width, and height together")
-        if args.x < 0 or args.y < 0 or args.width <= 0 or args.height <= 0:
-            raise ContractError("capture crop coordinates and size are invalid")
-        image = image.crop((args.x, args.y, args.x + args.width, args.y + args.height))
-    output.parent.mkdir(parents=True, exist_ok=True)
-    image.save(output, format="PNG")
-    _print({"status": "captured", "path": str(output), "window": window.window_text()})
+        crop = tuple(int(value) for value in crop_values)
+    else:
+        crop = None
+    desktop, display_id = _image_target(args)
+    result = capture_target(
+        output=Path(args.output),
+        desktop=desktop,
+        display_id=display_id,
+        window_title_regex=args.window_title_regex,
+        crop=crop,
+        windows_factory=_uia_windows,
+    )
+    _print(result)
     return 0
 
 
@@ -181,7 +184,10 @@ def _replay(args: argparse.Namespace) -> int:
 
 
 def _locate_image(args: argparse.Namespace) -> int:
+    desktop, display_id = _image_target(args)
     result = locate_image(
+        desktop=desktop,
+        display_id=display_id,
         window_title_regex=args.window_title_regex,
         template_path=Path(args.template),
         threshold=args.threshold,
@@ -192,7 +198,10 @@ def _locate_image(args: argparse.Namespace) -> int:
 
 
 def _click_image(args: argparse.Namespace) -> int:
+    desktop, display_id = _image_target(args)
     result = click_image(
+        desktop=desktop,
+        display_id=display_id,
         window_title_regex=args.window_title_regex,
         template_path=Path(args.template),
         evidence_dir=Path(args.evidence_dir),
@@ -238,8 +247,14 @@ def build_parser() -> argparse.ArgumentParser:
     compile_parser.add_argument("--output-root", required=True)
     compile_parser.set_defaults(handler=_compile)
 
+    def add_image_target(command: argparse.ArgumentParser) -> None:
+        target = command.add_mutually_exclusive_group(required=True)
+        target.add_argument("--window-title-regex")
+        target.add_argument("--desktop", action="store_true")
+        command.add_argument("--display-id", choices=["primary"])
+
     capture = subparsers.add_parser("capture")
-    capture.add_argument("--window-title-regex", required=True)
+    add_image_target(capture)
     capture.add_argument("--output", required=True)
     capture.add_argument("--x", type=int)
     capture.add_argument("--y", type=int)
@@ -248,14 +263,14 @@ def build_parser() -> argparse.ArgumentParser:
     capture.set_defaults(handler=_capture)
 
     locate = subparsers.add_parser("locate-image")
-    locate.add_argument("--window-title-regex", required=True)
+    add_image_target(locate)
     locate.add_argument("--template", required=True)
     locate.add_argument("--threshold", type=float, default=0.8)
     locate.add_argument("--timeout-seconds", type=float, default=10.0)
     locate.set_defaults(handler=_locate_image)
 
     click = subparsers.add_parser("click-image")
-    click.add_argument("--window-title-regex", required=True)
+    add_image_target(click)
     click.add_argument("--template", required=True)
     click.add_argument("--evidence-dir", required=True)
     click.add_argument("--action-id", required=True)

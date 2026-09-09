@@ -25,9 +25,9 @@ hosts:
   hermes: "conditional"
   opencode: "conditional"
 detect: {mode: "read-only", command: "python -c \"import importlib.metadata as m; print(m.version('airtest'))\""}
-permissions: ["capture configured Windows application windows", "send mouse and keyboard input to configured Windows application windows", "start and stop exact configured application processes", "write workflow-private traces and generated Airtest bundles"]
+permissions: ["capture configured Windows application windows or the explicit primary desktop", "send mouse and keyboard input to configured Windows application windows or the explicit primary desktop", "start and stop exact configured application processes", "write workflow-private traces and generated Airtest bundles"]
 network: {required_for_install: true, required_for_core_use: false}
-data_access: ["configured Windows application screens", "user-approved text input and clipboard text", "workflow-private screenshots, traces, logs, and generated scripts"]
+data_access: ["configured Windows application screens and explicit primary-desktop screenshots", "user-approved text input and clipboard text", "workflow-private screenshots, traces, logs, and generated scripts"]
 installation: {policy: "agent-managed", scope: "workspace-workflow", methods: ["existing", "uv"]}
 automation_status: "conditional"
 ---
@@ -36,7 +36,7 @@ automation_status: "conditional"
 
 ## 能力用途和非目标
 
-用于 `desktop-client-automation` 在 Windows 上捕获窗口图片、把用户确认的有效桌面探索路径编译为 `.air` Python 脚本，并执行确定性回放和最终视觉断言。它不是自然语言决策模型，不替代 Cua Driver 或宿主原生 Computer Use，也不承诺 macOS 桌面自动化。
+用于 `desktop-client-automation` 在 Windows 上捕获窗口或显式主显示器桌面图片、把用户确认的有效桌面探索路径编译为 `.air` Python 脚本，并执行确定性回放和最终视觉断言。`Windows:///` 是 Airtest 无 HWND 的原生 Windows 桌面设备，不是对窗口模式的模拟兜底。它不是自然语言决策模型，不替代 Cua Driver 或宿主原生 Computer Use，也不承诺 macOS 桌面自动化。
 
 ## 官方获取与文档
 
@@ -67,7 +67,7 @@ uv pip install --python <WORKFLOW_PYTHON> --require-hashes -r <HUB_ROOT>/workflo
 
 ## 调用示例和成功判据
 
-成功判据包括：doctor 返回 `ready`；能够唯一绑定一个测试窗口并保存截图；编译器从确认轨迹生成新版本 `.air` 包；回放能够按应用策略启动或绑定窗口、执行跨应用文本操作并通过用户确认的最终断言。
+成功判据包括：doctor 返回 `ready`；能够唯一绑定一个测试窗口，或在 Shell 已位于前台时绑定 `Windows:///` 的主显示器桌面并保存截图；桌面图片在每次输入前的新鲜主显示器截图中唯一匹配；编译器从确认轨迹生成新版本 `.air` 包；回放能够按应用策略启动或绑定目标、执行操作并通过用户确认的最终断言。桌面目标不要求 UIA，不发送 `Win+D`，被其他窗口遮挡时以 `desktop-not-foreground` 失败。
 
 ## 权限、网络、数据和遥测
 
@@ -79,7 +79,7 @@ uv pip install --python <WORKFLOW_PYTHON> --require-hashes -r <HUB_ROOT>/workflo
 
 ## 已知限制
 
-第一版不支持 macOS/Linux 桌面目标、通用二进制剪贴板、任意流程图、无限循环或身份验证自动输入。DPI、主题、字体、语言和应用升级可能导致图片锚点漂移；生成但未回放的脚本只能标记为未验证。
+Airtest 回放第一版不支持 macOS/Linux 桌面目标、通用二进制剪贴板、任意流程图、无限循环或身份验证自动输入。Cua 可在 macOS 动态操作桌面，不代表 Airtest 已具备该回放后端。DPI、主题、字体、语言、显示器布局和应用升级可能导致图片锚点漂移；生成但未回放的脚本只能标记为未验证。
 
 ## 替代能力
 

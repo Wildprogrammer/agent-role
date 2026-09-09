@@ -14,10 +14,28 @@ class RuntimeFailure(RuntimeError):
     pass
 
 
+DESKTOP_INPUT_ACTIONS = {
+    "click-image",
+    "double-click-image",
+    "right-click-image",
+    "click-coordinate",
+    "type-text",
+    "press-key",
+    "hotkey",
+    "scroll",
+    "drag-image",
+    "copy-text",
+    "paste-text",
+}
+GA_ROOT = 2
+
+
 def _dependencies() -> dict[str, Any]:
     try:
+        from airtest import aircv
         import psutil
         import win32clipboard
+        import win32gui
         from airtest.core.api import (
             Template,
             device,
@@ -25,6 +43,7 @@ def _dependencies() -> dict[str, Any]:
             init_device,
             set_current,
             snapshot,
+            swipe,
             text,
             touch,
             wait,
@@ -126,6 +145,57 @@ def _require_foreground(window: Any) -> None:
 def _focus_window(window: Any) -> None:
     window.set_focus()
     _require_foreground(window)
+
+
+def _desktop_shell_hosts(win32gui: Any) -> set[int]:
+    hosts: set[int] = set()
+    get_shell_window = getattr(win32gui, "GetShellWindow", None)
+    if callable(get_shell_window):
+        shell = int(get_shell_window() or 0)
+    else:
+        find_window = getattr(win32gui, "FindWindow", None)
+        shell = (
+            int(find_window("Progman", None) or 0)
+            if callable(find_window)
+            else 0
+        )
+    if shell:
+        hosts.add(shell)
+
+    def collect(hwnd: int, _: object) -> bool:
+        if win32gui.FindWindowEx(hwnd, 0, "SHELLDLL_DefView", None):
+            hosts.add(int(hwnd))
+        return True
+
+    win32gui.EnumWindows(collect, None)
+    return hosts
+
+
+def _require_desktop_foreground(win32gui: Any) -> None:
+    foreground = int(win32gui.GetForegroundWindow() or 0)
+    root = int(win32gui.GetAncestor(foreground, GA_ROOT) or foreground)
+    if foreground and root in _desktop_shell_hosts(win32gui):
+        return
+    if foreground:
+        try:
+            left, top, right, bottom = win32gui.GetWindowRect(root)
+            desktop = win32gui.GetWindowRect(win32gui.GetDesktopWindow())
+        except (AttributeError, OSError):
+            pass
+        else:
+            desktop_left, desktop_top, desktop_right, desktop_bottom = desktop
+            intersects_desktop = (
+                left < desktop_right
+                and right > desktop_left
+                and top < desktop_bottom
+                and bottom > desktop_top
+            )
+            if not intersects_desktop:
+                return
+    raise RuntimeFailure(
+        "desktop-not-foreground: show the desktop manually and retry; "
+        "the workflow does not send Win+D"
+    )
 
 
 def _windows_for_pid(pid: int) -> list[Any]:
@@ -233,7 +303,13 @@ def _prepare_apps(manifest: dict[str, Any], deps: dict[str, Any]) -> dict[str, i
     init_device = deps["init_device"]
     indexes: dict[str, int] = {}
     windows: dict[str, Any] = {}
+    desktop_aliases: set[str] = set()
     for app in manifest["apps"]:
+        if app["target_kind"] == "desktop":
+            init_device(platform="Windows")
+            indexes[app["alias"]] = len(indexes)
+            desktop_aliases.add(app["alias"])
+            continue
         pid: int | None = None
         pids: set[int] | None = None
         if app["target_kind"] == "application":
@@ -267,6 +343,7 @@ def _prepare_apps(manifest: dict[str, Any], deps: dict[str, Any]) -> dict[str, i
         indexes[app["alias"]] = len(indexes)
         windows[app["alias"]] = window
     deps["windows"] = windows
+    deps["desktop_aliases"] = desktop_aliases
     return indexes
 
 
@@ -303,6 +380,87 @@ def _template(deps: dict[str, Any], bundle: Path, step: dict[str, Any], key: str
     )
 
 
+def _primary_display_crop(device: Any, screen: Any) -> tuple[Any, int, int]:
+    virtual = device.monitor
+    primary = device.main_monitor
+    expected = (int(virtual["height"]), int(virtual["width"]))
+    if getattr(screen, "shape", ())[:2] != expected:
+        raise RuntimeFailure("display-mismatch: desktop screenshot size changed")
+    left = int(primary["left"] - virtual["left"])
+    top = int(primary["top"] - virtual["top"])
+    right = left + int(primary["width"])
+    bottom = top + int(primary["height"])
+    if left < 0 or top < 0 or right > expected[1] or bottom > expected[0]:
+        raise RuntimeFailure(
+            "display-mismatch: primary display is outside virtual desktop"
+        )
+    return screen[top:bottom, left:right], left, top
+
+
+def _primary_local_to_virtual(
+    device: Any, position: tuple[int, int],
+) -> tuple[int, int]:
+    virtual = device.monitor
+    primary = device.main_monitor
+    x, y = map(int, position)
+    width = int(primary["width"])
+    height = int(primary["height"])
+    offset_x = int(primary["left"] - virtual["left"])
+    offset_y = int(primary["top"] - virtual["top"])
+    if (
+        offset_x < 0
+        or offset_y < 0
+        or offset_x + width > int(virtual["width"])
+        or offset_y + height > int(virtual["height"])
+    ):
+        raise RuntimeFailure(
+            "display-mismatch: primary display is outside virtual desktop"
+        )
+    if not 0 <= x < width or not 0 <= y < height:
+        raise RuntimeFailure(
+            "display-mismatch: desktop coordinate is outside primary display"
+        )
+    return (
+        x + offset_x,
+        y + offset_y,
+    )
+
+
+def _desktop_match_once(
+    deps: dict[str, Any], target: Any,
+) -> tuple[int, int] | None:
+    current = deps["device"]()
+    screen = current.snapshot()
+    primary, offset_x, offset_y = _primary_display_crop(current, screen)
+    matches = target.match_all_in(primary) or []
+    if len(matches) > 1:
+        raise RuntimeFailure(
+            f"ambiguous-match: desktop template matched {len(matches)} locations"
+        )
+    if not matches:
+        return None
+    x, y = matches[0]["result"]
+    return int(x) + offset_x, int(y) + offset_y
+
+
+def _wait_for_unique_desktop_match(
+    deps: dict[str, Any],
+    target: Any,
+    timeout: float,
+    *,
+    clock: Any = time.monotonic,
+    sleeper: Any = time.sleep,
+) -> tuple[int, int]:
+    deadline = clock() + timeout
+    while True:
+        position = _desktop_match_once(deps, target)
+        if position is not None:
+            return position
+        if clock() >= deadline:
+            raise deps["TargetNotFoundError"]("desktop template was not found")
+        sleeper(0.25)
+
+
 def _activate(deps: dict[str, Any], indexes: dict[str, int], alias: str) -> None:
     deps["set_current"](indexes[alias])
     window = deps.get("windows", {}).get(alias)
@@ -330,18 +488,33 @@ def _run_step(
 ) -> None:
     _activate(deps, indexes, step["app"])
     action = step["action"]
+    if (
+        step["app"] in deps.get("desktop_aliases", set())
+        and action in DESKTOP_INPUT_ACTIONS
+    ):
+        _require_desktop_foreground(deps["win32gui"])
     timeout = float(step["timeout_seconds"])
     if action in {"click-image", "double-click-image", "right-click-image", "wait-image"}:
         target = _template(deps, bundle, step)
-        position = deps["wait"](target, timeout=timeout)
+        is_desktop = step["app"] in deps.get("desktop_aliases", set())
+        if is_desktop:
+            position = _wait_for_unique_desktop_match(deps, target, timeout)
+        else:
+            position = deps["wait"](target, timeout=timeout)
         if action == "wait-image":
             return
         if action == "right-click-image":
-            deps["mouse"].click(button="right", coords=position)
+            if is_desktop:
+                deps["touch"](position, right_click=True)
+            else:
+                deps["mouse"].click(button="right", coords=position)
         else:
             deps["touch"](position, times=2 if action == "double-click-image" else 1)
     elif action == "click-coordinate":
-        deps["touch"]((int(step["x"]), int(step["y"])))
+        position = (int(step["x"]), int(step["y"]))
+        if step["app"] in deps.get("desktop_aliases", set()):
+            position = _primary_local_to_virtual(deps["device"](), position)
+        deps["touch"](position)
     elif action == "type-text":
         deps["text"](_resolve_text(step["text"], parameters), enter=False)
     elif action == "press-key":
@@ -354,12 +527,25 @@ def _run_step(
         wheel = amount if direction in {"up", "left"} else -amount
         deps["mouse"].scroll(coords=None, wheel_dist=wheel)
     elif action == "drag-image":
-        start = deps["wait"](_template(deps, bundle, step, "from_template"), timeout=timeout)
-        end = deps["wait"](_template(deps, bundle, step, "to_template"), timeout=timeout)
-        deps["mouse"].move(coords=start)
-        deps["mouse"].press(button="left", coords=start)
-        deps["mouse"].move(coords=end)
-        deps["mouse"].release(button="left", coords=end)
+        if step["app"] in deps.get("desktop_aliases", set()):
+            start = _wait_for_unique_desktop_match(
+                deps, _template(deps, bundle, step, "from_template"), timeout
+            )
+            end = _wait_for_unique_desktop_match(
+                deps, _template(deps, bundle, step, "to_template"), timeout
+            )
+            deps["swipe"](start, end)
+        else:
+            start = deps["wait"](
+                _template(deps, bundle, step, "from_template"), timeout=timeout
+            )
+            end = deps["wait"](
+                _template(deps, bundle, step, "to_template"), timeout=timeout
+            )
+            deps["mouse"].move(coords=start)
+            deps["mouse"].press(button="left", coords=start)
+            deps["mouse"].move(coords=end)
+            deps["mouse"].release(button="left", coords=end)
     elif action == "copy-text":
         _hotkey(deps, ["CTRL", "C"])
     elif action == "paste-text":
@@ -394,8 +580,13 @@ def _assert_success(
     target = _template(deps, bundle, assertion)
     deadline = time.monotonic() + float(assertion["timeout_seconds"])
     stable_since: float | None = None
+    is_desktop = assertion["app"] in deps.get("desktop_aliases", set())
     while time.monotonic() < deadline:
-        found = deps["exists"](target)
+        found = (
+            _desktop_match_once(deps, target)
+            if is_desktop
+            else deps["exists"](target)
+        )
         if found:
             stable_since = stable_since or time.monotonic()
             if time.monotonic() - stable_since >= float(assertion["stable_seconds"]):

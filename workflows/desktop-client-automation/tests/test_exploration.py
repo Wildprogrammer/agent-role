@@ -3,9 +3,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pytest
 from PIL import Image
 
+from agent_workflow_hub.desktop_client_automation import exploration
 from agent_workflow_hub.desktop_client_automation.airtest_runtime import RuntimeFailure
 from agent_workflow_hub.desktop_client_automation.contracts import ContractError
 from agent_workflow_hub.desktop_client_automation.exploration import (
@@ -56,7 +58,7 @@ def fake_dependencies(
         events.append(("template", path, threshold))
         return ("template", path, threshold)
 
-    def init_device(*, platform: str, uuid: str) -> None:
+    def init_device(*, platform: str, uuid: str | None = None) -> None:
         events.append(("init_device", platform, uuid))
 
     def set_current(index: int) -> None:
@@ -68,8 +70,27 @@ def fake_dependencies(
             raise TargetNotFoundError("missing")
         return position
 
-    def touch(point: tuple[int, int], *, times: int) -> None:
-        events.append(("touch", point, times))
+    def touch(
+        point: tuple[int, int], *, times: int = 1, right_click: bool = False,
+    ) -> None:
+        if right_click:
+            events.append(("touch", point, times, right_click))
+        else:
+            events.append(("touch", point, times))
+
+    class Device:
+        monitor = {"left": 0, "top": 0, "width": 1920, "height": 1080}
+        main_monitor = {"left": 0, "top": 0, "width": 1920, "height": 1080}
+
+        def snapshot(self) -> object:
+            events.append("desktop-capture")
+            return np.zeros((1080, 1920, 3), dtype=np.uint8)
+
+    class Aircv:
+        @staticmethod
+        def imwrite(path: str, image: object) -> None:
+            events.append(("imwrite", path, getattr(image, "shape")))
+            Image.fromarray(image).save(path, format="PNG")  # type: ignore[arg-type]
 
     return {
         "Template": template,
@@ -78,7 +99,206 @@ def fake_dependencies(
         "set_current": set_current,
         "wait": wait,
         "touch": touch,
+        "device": lambda: Device(),
+        "aircv": Aircv,
+        "win32gui": object(),
     }
+
+
+def test_locate_image_uses_primary_desktop_without_window_binding(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    events: list[object] = []
+    template = write_template(tmp_path / "icon.png")
+    dependencies = fake_dependencies(events, (0, 0))
+    monkeypatch.setattr(exploration, "_require_desktop_foreground", lambda _: None)
+    monkeypatch.setattr(
+        exploration,
+        "_wait_for_unique_desktop_match",
+        lambda *args, **kwargs: (42, 84),
+    )
+
+    result = locate_image(
+        desktop=True,
+        display_id="primary",
+        window_title_regex=None,
+        template_path=template,
+        threshold=0.85,
+        timeout_seconds=2,
+        dependencies_factory=lambda: dependencies,
+    )
+
+    assert ("init_device", "Windows", None) in events
+    assert result["target"] == "desktop:primary"
+    assert result["position"] == [42, 84]
+
+
+def test_click_image_on_desktop_records_evidence_and_one_touch(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    events: list[object] = []
+    template = write_template(tmp_path / "icon.png")
+    evidence = (tmp_path / "evidence").resolve()
+    dependencies = fake_dependencies(events, (0, 0))
+    monkeypatch.setattr(exploration, "_require_desktop_foreground", lambda _: None)
+    monkeypatch.setattr(
+        exploration,
+        "_wait_for_unique_desktop_match",
+        lambda *args, **kwargs: (42, 84),
+    )
+
+    result = click_image(
+        desktop=True,
+        display_id="primary",
+        window_title_regex=None,
+        template_path=template,
+        threshold=0.85,
+        timeout_seconds=2,
+        evidence_dir=evidence,
+        action_id="click-icon",
+        settle_seconds=0,
+        dependencies_factory=lambda: dependencies,
+    )
+
+    assert result["status"] == "clicked"
+    assert ("touch", (42, 84), 1) in events
+    assert Path(str(result["before"])).is_file()
+    assert Path(str(result["after"])).is_file()
+
+
+def test_desktop_click_not_found_keeps_before_and_never_touches(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    events: list[object] = []
+    template = write_template(tmp_path / "missing.png")
+    dependencies = fake_dependencies(events, (0, 0))
+    missing = dependencies["TargetNotFoundError"]
+    monkeypatch.setattr(exploration, "_require_desktop_foreground", lambda _: None)
+    monkeypatch.setattr(
+        exploration,
+        "_wait_for_unique_desktop_match",
+        lambda *args, **kwargs: (_ for _ in ()).throw(missing("missing")),
+    )
+
+    result = click_image(
+        desktop=True,
+        display_id="primary",
+        window_title_regex=None,
+        template_path=template,
+        evidence_dir=(tmp_path / "evidence").resolve(),
+        action_id="missing-icon",
+        settle_seconds=0,
+        dependencies_factory=lambda: dependencies,
+    )
+
+    assert result["status"] == "not-found"
+    assert result["after"] is None
+    assert not any(
+        isinstance(event, tuple) and event[0] == "touch" for event in events
+    )
+
+
+def test_desktop_ambiguous_match_never_touches(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    events: list[object] = []
+    template = write_template(tmp_path / "ambiguous.png")
+    dependencies = fake_dependencies(events, (0, 0))
+    monkeypatch.setattr(exploration, "_require_desktop_foreground", lambda _: None)
+    monkeypatch.setattr(
+        exploration,
+        "_wait_for_unique_desktop_match",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            RuntimeFailure("ambiguous-match")
+        ),
+    )
+
+    with pytest.raises(RuntimeFailure, match="ambiguous-match"):
+        click_image(
+            desktop=True,
+            display_id="primary",
+            window_title_regex=None,
+            template_path=template,
+            evidence_dir=(tmp_path / "evidence").resolve(),
+            action_id="ambiguous-icon",
+            settle_seconds=0,
+            dependencies_factory=lambda: dependencies,
+        )
+
+    assert not any(
+        isinstance(event, tuple) and event[0] == "touch" for event in events
+    )
+
+
+def test_capture_target_saves_primary_desktop_png(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    events: list[object] = []
+    dependencies = fake_dependencies(events, (0, 0))
+    output = (tmp_path / "desktop.png").resolve()
+    monkeypatch.setattr(exploration, "_require_desktop_foreground", lambda _: None)
+
+    result = exploration.capture_target(
+        output=output,
+        desktop=True,
+        display_id="primary",
+        dependencies_factory=lambda: dependencies,
+    )
+
+    assert result["target"] == "desktop:primary"
+    assert result["output"] == str(output)
+    assert output.is_file()
+    assert ("init_device", "Windows", None) in events
+    with Image.open(output) as image:
+        assert image.size == (1920, 1080)
+
+
+def test_desktop_click_rechecks_foreground_after_matching(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    events: list[object] = []
+    checks = 0
+    template = write_template(tmp_path / "icon.png")
+    evidence = (tmp_path / "evidence").resolve()
+    dependencies = fake_dependencies(events, (0, 0))
+
+    def require_foreground(_: object) -> None:
+        nonlocal checks
+        checks += 1
+        if checks == 2:
+            raise RuntimeFailure("desktop-not-foreground")
+
+    monkeypatch.setattr(exploration, "_require_desktop_foreground", require_foreground)
+    monkeypatch.setattr(
+        exploration,
+        "_wait_for_unique_desktop_match",
+        lambda *args, **kwargs: (42, 84),
+    )
+
+    with pytest.raises(RuntimeFailure, match="desktop-not-foreground"):
+        click_image(
+            desktop=True,
+            display_id="primary",
+            window_title_regex=None,
+            template_path=template,
+            evidence_dir=evidence,
+            action_id="click-icon",
+            settle_seconds=0,
+            dependencies_factory=lambda: dependencies,
+        )
+
+    assert checks == 2
+    assert (evidence / "click-icon-before.png").is_file()
+    assert not (evidence / "click-icon-after.png").exists()
+    assert not any(
+        isinstance(event, tuple) and event[0] == "touch" for event in events
+    )
 
 
 def test_locate_image_returns_fresh_airtest_match(tmp_path: Path) -> None:

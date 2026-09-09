@@ -1,0 +1,36 @@
+{
+  "schema_version": "1.0",
+  "name": "open-desktop-application",
+  "description": "双击主显示器桌面上的应用图标并验证应用窗口出现。",
+  "source_surface": "cua-driver-mcp",
+  "target_platform": "windows",
+  "effective_path_confirmed": true,
+  "decision": "generate-only",
+  "apps": [
+    {
+      "alias": "desktop",
+      "target_kind": "desktop",
+      "lifecycle": "attach-only",
+      "display_id": "primary"
+    }
+  ],
+  "parameters": [],
+  "steps": [
+    {
+      "id": "open-application",
+      "app": "desktop",
+      "action": "double-click-image",
+      "effect": "idempotent",
+      "template": "C:\\absolute\\staging\\desktop-icon.png",
+      "threshold": 0.85,
+      "timeout_seconds": 10
+    }
+  ],
+  "success_assertion": {
+    "app": "desktop",
+    "template": "C:\\absolute\\staging\\application-window.png",
+    "threshold": 0.85,
+    "timeout_seconds": 30,
+    "stable_seconds": 1
+  }
+}

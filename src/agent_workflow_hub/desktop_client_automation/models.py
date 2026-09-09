@@ -6,7 +6,8 @@ from typing import Literal
 
 
 Lifecycle = Literal["restart", "reuse", "attach-only"]
-TargetKind = Literal["application", "system-dialog"]
+TargetKind = Literal["application", "system-dialog", "desktop"]
+DisplayId = Literal["primary"]
 Effect = Literal["none", "read", "idempotent", "create", "submit", "send", "delete", "unknown"]
 Decision = Literal["generate-only", "generate-and-replay"]
 
@@ -16,11 +17,12 @@ class AppSpec:
     alias: str
     target_kind: TargetKind
     lifecycle: Lifecycle
+    display_id: DisplayId | None
     executable: Path | None
     launch_executable: Path | None
     window_process_executable: Path | None
     launch_args: tuple[str, ...]
-    window_title_regex: str
+    window_title_regex: str | None
     startup_timeout_seconds: float
     shutdown_timeout_seconds: float
     force_terminate: bool

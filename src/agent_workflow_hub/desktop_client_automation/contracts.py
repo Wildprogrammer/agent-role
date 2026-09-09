@@ -34,7 +34,7 @@ TOP_LEVEL_FIELDS = {
 }
 APP_FIELDS = {
     "alias", "target_kind", "lifecycle", "executable", "launch_executable", "launch_args",
-    "window_process_executable", "window_title_regex", "startup_timeout_seconds",
+    "window_process_executable", "window_title_regex", "display_id", "startup_timeout_seconds",
     "shutdown_timeout_seconds", "force_terminate",
 }
 PARAMETER_FIELDS = {"name", "kind", "default", "sensitive"}
@@ -105,14 +105,35 @@ def _app(value: Any) -> AppSpec:
     alias = _identifier(item.get("alias"), "app.alias")
     kind = item.get("target_kind", "application")
     lifecycle = item.get("lifecycle", "reuse")
-    if kind not in {"application", "system-dialog"}:
+    if kind not in {"application", "system-dialog", "desktop"}:
         raise ContractError(f"app {alias} has unsupported target_kind")
     if lifecycle not in {"restart", "reuse", "attach-only"}:
         raise ContractError(f"app {alias} has unsupported lifecycle")
     executable: Path | None = None
     launch_executable: Path | None = None
     window_process_executable: Path | None = None
-    if kind == "system-dialog":
+    display_id: str | None = None
+    window_title_regex: str | None = None
+    if kind == "desktop":
+        if lifecycle != "attach-only":
+            raise ContractError("desktop must be attach-only")
+        if item.get("display_id") != "primary":
+            raise ContractError(f"app {alias} display_id must equal primary")
+        forbidden = (
+            "executable",
+            "launch_executable",
+            "window_process_executable",
+            "window_title_regex",
+        )
+        if any(item.get(name) not in {None, ""} for name in forbidden):
+            raise ContractError(
+                "desktop must omit executable, launch_executable, "
+                "window_process_executable, and window_title_regex"
+            )
+        display_id = "primary"
+    elif kind == "system-dialog":
+        if item.get("display_id") not in {None, ""}:
+            raise ContractError("system-dialog must omit display_id")
         if (
             lifecycle != "attach-only"
             or item.get("executable") not in {None, ""}
@@ -123,7 +144,15 @@ def _app(value: Any) -> AppSpec:
                 "system-dialog must be attach-only and omit executable, launch_executable, "
                 "and window_process_executable"
             )
+        window_title_regex = _text(
+            item.get("window_title_regex"), f"app {alias} window_title_regex"
+        )
     else:
+        if item.get("display_id") not in {None, ""}:
+            raise ContractError("application must omit display_id")
+        window_title_regex = _text(
+            item.get("window_title_regex"), f"app {alias} window_title_regex"
+        )
         executable = Path(_text(item.get("executable"), f"app {alias} executable"))
         if not executable.is_absolute():
             raise ContractError(f"app {alias} executable must be absolute")
@@ -161,11 +190,12 @@ def _app(value: Any) -> AppSpec:
         alias=alias,
         target_kind=kind,
         lifecycle=lifecycle,
+        display_id=display_id,
         executable=executable,
         launch_executable=launch_executable,
         window_process_executable=window_process_executable,
         launch_args=tuple(launch_args),
-        window_title_regex=_text(item.get("window_title_regex"), f"app {alias} window_title_regex"),
+        window_title_regex=window_title_regex,
         startup_timeout_seconds=_positive_number(item.get("startup_timeout_seconds"), "startup_timeout_seconds", 30),
         shutdown_timeout_seconds=_positive_number(item.get("shutdown_timeout_seconds"), "shutdown_timeout_seconds", 10),
         force_terminate=force,

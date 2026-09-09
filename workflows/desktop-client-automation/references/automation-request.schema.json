@@ -51,20 +51,44 @@
     "app": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["alias", "target_kind", "lifecycle", "window_title_regex"],
+      "required": ["alias", "target_kind", "lifecycle"],
       "properties": {
         "alias": {"$ref": "#/$defs/identifier"},
-        "target_kind": {"enum": ["application", "system-dialog"]},
+        "target_kind": {"enum": ["application", "system-dialog", "desktop"]},
         "lifecycle": {"enum": ["restart", "reuse", "attach-only"]},
+        "display_id": {"type": ["string", "null"]},
         "executable": {"type": ["string", "null"]},
         "launch_executable": {"type": ["string", "null"]},
         "window_process_executable": {"type": ["string", "null"]},
         "launch_args": {"type": "array", "items": {"type": "string"}, "default": []},
-        "window_title_regex": {"type": "string", "minLength": 1},
+        "window_title_regex": {"type": ["string", "null"], "minLength": 1},
         "startup_timeout_seconds": {"type": "number", "exclusiveMinimum": 0},
         "shutdown_timeout_seconds": {"type": "number", "exclusiveMinimum": 0},
         "force_terminate": {"type": "boolean", "default": false}
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {"target_kind": {"const": "desktop"}},
+            "required": ["target_kind"]
+          },
+          "then": {
+            "required": ["display_id"],
+            "properties": {
+              "lifecycle": {"const": "attach-only"},
+              "display_id": {"const": "primary"},
+              "executable": {"type": "null"},
+              "launch_executable": {"type": "null"},
+              "window_process_executable": {"type": "null"},
+              "window_title_regex": {"type": "null"}
+            }
+          },
+          "else": {
+            "required": ["window_title_regex"],
+            "properties": {"display_id": {"type": "null"}}
+          }
+        }
+      ]
     },
     "parameter": {
       "type": "object",

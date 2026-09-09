@@ -27,9 +27,9 @@ hosts:
 detect:
   mode: "read-only"
   command: "cua-driver --version"
-permissions: ["desktop accessibility inspection", "window-scoped screen capture", "mouse and keyboard input to an explicitly selected desktop target", "workflow-private action evidence"]
+permissions: ["desktop accessibility inspection", "window-scoped and explicit desktop screen capture", "mouse and keyboard input to an explicitly selected window or desktop target", "workflow-private action evidence"]
 network: {required_for_install: true, required_for_core_use: false, telemetry_default_upstream: true, workflow_policy: "disable telemetry"}
-data_access: ["titles and accessibility trees of selected desktop windows", "screenshots of selected desktop windows", "user-authorized text and input events"]
+data_access: ["titles and accessibility trees of selected desktop windows", "screenshots of selected desktop windows or the explicit primary desktop", "user-authorized text and input events"]
 installation:
   policy: "user-managed"
   scope: "system"
@@ -64,7 +64,7 @@ Codex、OpenClaw、Claude Code 和 Hermes 只有在当前任务实际列出 Cua 
 
 ## 调用示例和成功判据
 
-Agent 通过 `cua-driver mcp` 调用 `list_windows`、`get_window_state` 和动作工具。成功要求精确锁定 `pid + window_id`，元素动作使用同一新鲜快照中的 `snapshot_id + element_token`，像素动作只取自该窗口同次截图，动作后重新读取状态。CLI 与 MCP 使用同一运行时契约，但 Agent 动作优先保留在 MCP 中，Hub 不复制动作协议。
+Agent 通过 `cua-driver mcp` 调用状态和动作工具。窗口动作先用 `list_windows` 和 `get_window_state` 精确锁定 `pid + window_id`；元素动作使用同一新鲜快照中的 `snapshot_id + element_token`，像素动作只取自该窗口同次截图。显式桌面动作改用同一会话的 `get_desktop_state`，并把新鲜桌面截图中观察到的坐标发送给 `{kind:"desktop",display_id:"primary"}`；0.23.2 的双击由一次 `click` 配合 `count=2` 完成。两种目标都在动作后重新读取对应状态，不复用旧截图坐标。Windows 和 macOS 都允许这一动态桌面路径，实际可用性仍以当前 MCP 工具和系统权限为准。CLI 与 MCP 使用同一运行时契约，但 Agent 动作优先保留在 MCP 中，Hub 不复制动作协议。
 
 ## 权限、网络、数据和遥测
 

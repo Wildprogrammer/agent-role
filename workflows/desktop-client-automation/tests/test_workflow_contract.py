@@ -14,6 +14,19 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 README = REPOSITORY_ROOT / "README.md"
 
 
+def test_request_schema_exposes_primary_desktop_target() -> None:
+    schema = json.loads(
+        (SKILL.parent / "references" / "automation-request.schema.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    app = schema["$defs"]["app"]
+    assert "desktop" in app["properties"]["target_kind"]["enum"]
+    assert app["properties"]["display_id"]["type"] == ["string", "null"]
+    assert app["properties"]["window_title_regex"]["type"] == ["string", "null"]
+    assert any("then" in branch for branch in app["allOf"])
+
+
 def test_public_readme_lists_desktop_client_automation() -> None:
     body = README.read_text(encoding="utf-8")
     assert "| `desktop-client-automation` |" in body
@@ -21,6 +34,7 @@ def test_public_readme_lists_desktop_client_automation() -> None:
 
 def test_public_readme_includes_desktop_automation_example() -> None:
     body = README.read_text(encoding="utf-8")
+    assert "点击当前主显示器桌面上的指定图标" in body
     assert "把确认后的 Windows 操作路径固化为 Airtest 回放" in body
 
 
@@ -84,6 +98,31 @@ def test_airtest_is_host_independent_but_remains_windows_desktop_only() -> None:
         "macos": "unsupported-desktop-v1",
         "linux": "unsupported-desktop-v1",
     }
+
+
+def test_documents_native_desktop_target_contract() -> None:
+    workflow = SKILL.read_text(encoding="utf-8")
+    cua = (
+        REPOSITORY_ROOT / "capabilities/mcp/cua-driver/CAPABILITY.md"
+    ).read_text(encoding="utf-8")
+    airtest = (
+        REPOSITORY_ROOT / "capabilities/python/airtest/CAPABILITY.md"
+    ).read_text(encoding="utf-8")
+
+    for text in (
+        "get_desktop_state",
+        "display_id",
+        "primary",
+        "count=2",
+        "Windows:///",
+        "desktop-not-foreground",
+        "不要求 UIA",
+    ):
+        assert text in workflow
+    assert "get_desktop_state" in cua
+    assert "display_id" in cua and "primary" in cua
+    assert "Windows:///" in airtest
+    assert "unsupported-desktop-v1" in airtest
 
 
 def test_skill_does_not_duplicate_cua_actions_in_python() -> None:

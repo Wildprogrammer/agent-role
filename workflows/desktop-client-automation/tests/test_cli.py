@@ -163,6 +163,8 @@ def test_capture_uses_shared_uia_window_enumerator(
     output = (tmp_path / "capture.png").resolve()
     args = Namespace(
         output=str(output),
+        desktop=False,
+        display_id=None,
         window_title_regex="^Calculator$",
         x=None,
         y=None,
@@ -196,6 +198,8 @@ def test_capture_rejects_window_that_did_not_become_foreground(
     monkeypatch.setattr(cli, "_uia_windows", lambda **criteria: [Window()])
     args = Namespace(
         output=str((tmp_path / "capture.png").resolve()),
+        desktop=False,
+        display_id=None,
         window_title_regex="^Calculator$",
         x=None,
         y=None,
@@ -243,6 +247,88 @@ def test_parser_exposes_one_shot_image_commands() -> None:
     assert click.timeout_seconds == 10.0
 
 
+def test_capture_accepts_primary_desktop_target() -> None:
+    args = cli.build_parser().parse_args(
+        [
+            "capture",
+            "--desktop",
+            "--display-id",
+            "primary",
+            "--output",
+            r"C:\evidence\desktop.png",
+        ]
+    )
+
+    assert args.desktop is True
+    assert args.window_title_regex is None
+    assert args.display_id == "primary"
+
+
+@pytest.mark.parametrize(
+    ("command", "required"),
+    [
+        ("capture", ["--output", r"C:\evidence\desktop.png"]),
+        ("locate-image", ["--template", r"C:\templates\icon.png"]),
+        (
+            "click-image",
+            [
+                "--template",
+                r"C:\templates\icon.png",
+                "--evidence-dir",
+                r"C:\evidence",
+                "--action-id",
+                "click-icon",
+            ],
+        ),
+    ],
+)
+def test_image_commands_require_exactly_one_target(
+    command: str,
+    required: list[str],
+) -> None:
+    parser = cli.build_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args([command, *required])
+    with pytest.raises(SystemExit):
+        parser.parse_args(
+            [
+                command,
+                "--desktop",
+                "--display-id",
+                "primary",
+                "--window-title-regex",
+                "^Demo$",
+                *required,
+            ]
+        )
+
+
+def test_locate_image_cli_defaults_desktop_display_to_primary(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    recorded: dict[str, object] = {}
+
+    def locate_image(**kwargs: object) -> dict[str, object]:
+        recorded.update(kwargs)
+        return {"status": "not-found"}
+
+    monkeypatch.setattr(cli, "locate_image", locate_image)
+    args = Namespace(
+        desktop=True,
+        display_id=None,
+        window_title_regex=None,
+        template=r"C:\templates\icon.png",
+        threshold=0.8,
+        timeout_seconds=1.0,
+    )
+
+    assert cli._locate_image(args) == 1
+    assert recorded["desktop"] is True
+    assert recorded["display_id"] == "primary"
+    assert json.loads(capsys.readouterr().out)["status"] == "not-found"
+
+
 def test_locate_image_cli_prints_result_and_maps_status_to_exit_code(
     tmp_path: Path, monkeypatch, capsys,
 ) -> None:
@@ -261,6 +347,8 @@ def test_locate_image_cli_prints_result_and_maps_status_to_exit_code(
 
     monkeypatch.setattr(cli, "locate_image", locate_image)
     args = Namespace(
+        desktop=False,
+        display_id=None,
         window_title_regex="BambuStudio",
         template=str(template),
         threshold=0.92,
@@ -269,6 +357,8 @@ def test_locate_image_cli_prints_result_and_maps_status_to_exit_code(
 
     assert cli._locate_image(args) == 1
     assert recorded == {
+        "desktop": False,
+        "display_id": None,
         "window_title_regex": "BambuStudio",
         "template_path": template,
         "threshold": 0.92,
@@ -298,6 +388,8 @@ def test_click_image_cli_prints_clicked_result(
 
     monkeypatch.setattr(cli, "click_image", click_image)
     args = Namespace(
+        desktop=False,
+        display_id=None,
         window_title_regex="BambuStudio",
         template=str(template),
         evidence_dir=str(evidence_dir),
@@ -308,6 +400,8 @@ def test_click_image_cli_prints_clicked_result(
 
     assert cli._click_image(args) == 0
     assert recorded == {
+        "desktop": False,
+        "display_id": None,
         "window_title_regex": "BambuStudio",
         "template_path": template,
         "evidence_dir": evidence_dir,
