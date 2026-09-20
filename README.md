@@ -64,6 +64,7 @@ agent-role 的 README、工作流说明和相关网页
 | `information-collection` | 采集、筛选和总结指定网页资料，并按需生成交付文件。 | 调研、知识库建设、需求分析 |
 | `jenkins-operations` | 查询和操作 Jenkins 文件夹、视图、任务、Pipeline 与构建记录。 | 持续集成、自动化测试、发布流程 |
 | `knowledge-support-agent` | 从代码仓库、文档和已采集资料构建可追溯来源的本地知识解答 Agent。 | 内部答疑、产品知识库、研发支持 |
+| `lan-file-sharing` | 使用固定版本 Dufs 在局域网共享文件；简单临时下载可改用 Python `http.server`，经单独确认后也可通过用户自行配置的 ngrok 临时发布。 | 局域网传输、临时文件分发、受控公网分享 |
 | `meeting-notes` | 转写已授权的会议音视频，经人工审核后生成摘要和 Obsidian 会议记录。 | 会议归档、知识沉淀 |
 | `mysql-operations` | 查询或操作用户配置的 MySQL 数据库，并保留数据库自身权限边界。 | 数据核查、业务运维、测试准备 |
 | `requirements-analysis` | 澄清需求歧义，结合授权资料分析需求并生成可评审用例。 | 开发准备、测试设计、方案评审 |
@@ -83,6 +84,7 @@ agent-role 的 README、工作流说明和相关网页
 - “根据这个代码仓库和产品文档构建本地知识解答 Agent。”
 - “使用资料采集工作流收集 agent-role 的说明资料，交给知识解答工作流建立知识库，并回答 agent-role 的使用问题。”
 - “点击当前主显示器桌面上的指定图标；原生 Computer Use 不可用时使用 Cua Driver 探索，并把确认后的 Windows 操作路径固化为 Airtest 回放。”
+- “把这个目录通过局域网临时分享；如果未安装 Dufs，就使用 `http.server` 快速提供只读下载。”
 
 用户通常不需要直接运行 `workflows/*/scripts/` 中的脚本；这些脚本是工作流提供给 Agent 的确定性执行接口。
 

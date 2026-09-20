@@ -1,0 +1,86 @@
+{
+  "schema_version": 2,
+  "version": "0.46.0",
+  "assets": [
+    {
+      "system": "macos",
+      "machine": "arm64",
+      "filename": "dufs-v0.46.0-aarch64-apple-darwin.tar.gz",
+      "url": "https://github.com/sigoden/dufs/releases/download/v0.46.0/dufs-v0.46.0-aarch64-apple-darwin.tar.gz",
+      "size": 2462445,
+      "archive_sha256": "2c73fa330447c344111aea9159621af5e2d4460b9227562e09138e5c01d3becf",
+      "executable_sha256": "f8dd2a99048d254bab5e3d70e3384904c5e494cb6c38f0cf0417756556784f30",
+      "executable": "dufs"
+    },
+    {
+      "system": "macos",
+      "machine": "x86_64",
+      "filename": "dufs-v0.46.0-x86_64-apple-darwin.tar.gz",
+      "url": "https://github.com/sigoden/dufs/releases/download/v0.46.0/dufs-v0.46.0-x86_64-apple-darwin.tar.gz",
+      "size": 2764841,
+      "archive_sha256": "f494db0de9e95764199781754147c4a341227d4794b1bcf5dac862bd21c1216a",
+      "executable_sha256": "7a10900f1b541d3a2941cb44670e3376a179af87b211b8e652ac054d745090ab",
+      "executable": "dufs"
+    },
+    {
+      "system": "windows",
+      "machine": "arm64",
+      "filename": "dufs-v0.46.0-aarch64-pc-windows-msvc.zip",
+      "url": "https://github.com/sigoden/dufs/releases/download/v0.46.0/dufs-v0.46.0-aarch64-pc-windows-msvc.zip",
+      "size": 2331484,
+      "archive_sha256": "530e061b5a26182a7cfebc3d473c397aaef931b07f6eccab9592d5df57ef0c39",
+      "executable_sha256": "1b3f981a423cc26511d0a0a99a025bce5f2e20b4b0a82460600caf10684a8dba",
+      "executable": "dufs.exe"
+    },
+    {
+      "system": "windows",
+      "machine": "x86_64",
+      "filename": "dufs-v0.46.0-x86_64-pc-windows-msvc.zip",
+      "url": "https://github.com/sigoden/dufs/releases/download/v0.46.0/dufs-v0.46.0-x86_64-pc-windows-msvc.zip",
+      "size": 2323817,
+      "archive_sha256": "21d829653ac1f178b124ed384e2a57df19b99ae404935cba9a1a5719c199b0bf",
+      "executable_sha256": "3e443496f7811f931232e1f79eeca23d7d7ff1ea0c9dcac67b6586d69b47e11e",
+      "executable": "dufs.exe"
+    },
+    {
+      "system": "linux",
+      "machine": "arm64",
+      "filename": "dufs-v0.46.0-aarch64-unknown-linux-musl.tar.gz",
+      "url": "https://github.com/sigoden/dufs/releases/download/v0.46.0/dufs-v0.46.0-aarch64-unknown-linux-musl.tar.gz",
+      "size": 2618631,
+      "archive_sha256": "1472123ae3aa07e49404d16b20305c2dec90c59883ebda9308717f7205e6511b",
+      "executable_sha256": "5753d125dedb51bc4194e491de7d9081d7a1914a62c1fb4390d68ae55620334b",
+      "executable": "dufs"
+    },
+    {
+      "system": "linux",
+      "machine": "arm",
+      "filename": "dufs-v0.46.0-arm-unknown-linux-musleabihf.tar.gz",
+      "url": "https://github.com/sigoden/dufs/releases/download/v0.46.0/dufs-v0.46.0-arm-unknown-linux-musleabihf.tar.gz",
+      "size": 2385372,
+      "archive_sha256": "a2c0a922f944952673ab27706b66f272a76760a8480dc6a067993ab002eca122",
+      "executable_sha256": "11141fef0f5d801ed06e2b6db7a6f518df048c7869107769c41e89b6574700cf",
+      "executable": "dufs"
+    },
+    {
+      "system": "linux",
+      "machine": "armv7",
+      "filename": "dufs-v0.46.0-armv7-unknown-linux-musleabihf.tar.gz",
+      "url": "https://github.com/sigoden/dufs/releases/download/v0.46.0/dufs-v0.46.0-armv7-unknown-linux-musleabihf.tar.gz",
+      "size": 2311684,
+      "archive_sha256": "079f0b7ebfb50851a4c9f88c9b12e100322a1137eb57356d1e902f369618c9f6",
+      "executable_sha256": "555cd4f791c99dc8c40b8a7819ece313dce00591a9b3243f7eb53f6eaab8a0bf",
+      "executable": "dufs"
+    },
+    {
+      "system": "linux",
+      "machine": "x86_64",
+      "filename": "dufs-v0.46.0-x86_64-unknown-linux-musl.tar.gz",
+      "url": "https://github.com/sigoden/dufs/releases/download/v0.46.0/dufs-v0.46.0-x86_64-unknown-linux-musl.tar.gz",
+      "size": 2898409,
+      "archive_sha256": "817769f726613194bcff9d0e3e481eaccc86ac11208857614f36a8c02f410977",
+      "executable_sha256": "2c91337a4a0cabd2ce444dc4b5ffda6c0d4180b4b94278d1345dc958bf24ea68",
+      "executable": "dufs"
+    }
+  ]
+}

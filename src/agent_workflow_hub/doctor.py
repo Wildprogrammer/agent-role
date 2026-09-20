@@ -848,6 +848,22 @@ CAPABILITY_DETECTOR_CONTRACTS: Mapping[str, DetectorContract] = MappingProxyType
             aliases=("agent-browser", "Agent Browser"),
             behavior="fixed version probe",
         ),
+        "cli.dufs": _contract(
+            "executable",
+            executables=("dufs", "dufs.exe"),
+            version_argv=("{executable}", "--version"),
+            parser="semantic",
+            aliases=("dufs",),
+            behavior="fixed version probe",
+        ),
+        "cli.ngrok": _contract(
+            "executable",
+            executables=("ngrok", "ngrok.exe"),
+            version_argv=("{executable}", "--version"),
+            parser="semantic",
+            aliases=("ngrok",),
+            behavior="diagnostic version probe",
+        ),
         "cli.ffmpeg": _contract(
             "executable",
             executables=("ffmpeg", "ffmpeg.exe"),
@@ -1725,6 +1741,8 @@ detect_orcaslicer = _detector
 detect_playwright = _detector
 detect_prusaslicer = _detector
 detect_agent_browser = _detector
+detect_dufs = _detector
+detect_ngrok = _detector
 detect_ffmpeg = _detector
 detect_playwright_cli = _detector
 detect_tavily_search = _detector
@@ -1750,6 +1768,8 @@ DETECTORS: Mapping[
         "app.playwright": detect_playwright,
         "app.prusaslicer": detect_prusaslicer,
         "cli.agent-browser": detect_agent_browser,
+        "cli.dufs": detect_dufs,
+        "cli.ngrok": detect_ngrok,
         "cli.ffmpeg": detect_ffmpeg,
         "cli.playwright-cli": detect_playwright_cli,
         "cli.tavily-search": detect_tavily_search,

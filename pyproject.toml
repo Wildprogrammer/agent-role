@@ -31,6 +31,7 @@ testpaths = [
   "workflows/image-ocr/tests",
   "workflows/jenkins-operations/tests",
   "workflows/knowledge-support-agent/tests",
+  "workflows/lan-file-sharing/tests",
   "workflows/requirements-analysis/tests",
   "workflows/test-reporting/tests",
   "workflows/mysql-operations/tests",
