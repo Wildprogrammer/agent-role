@@ -5,26 +5,3 @@ __pycache__/
 *.egg-info/
 workspace/
 workflows/*/outputs/
-
-# Workflows intentionally excluded from the public repository.
-/workflows/automated-test-lifecycle/
-/workflows/zentao-operations/
-/workflows/environment-validation/
-/workflows/specialized-agent-deployment/
-
-# Dedicated Hub implementations and capabilities for excluded workflows.
-/src/agent_workflow_hub/automated_test_lifecycle/
-/src/agent_workflow_hub/zentao_operations/
-/src/agent_workflow_hub/environment_validation/
-/src/agent_workflow_hub/specialized_agent_deployment/
-/capabilities/cli/zentao-cli/
-
-# Dedicated tests and internal design records for excluded workflows.
-/tests/**/*automated_test_lifecycle*
-/tests/**/*zentao*
-/tests/**/*environment_validation*
-/tests/**/*specialized_agent_deployment*
-/docs/**/*automated-test-lifecycle*
-/docs/**/*zentao-operations*
-/docs/**/*environment-validation*
-/docs/**/*specialized-agent-deployment*
