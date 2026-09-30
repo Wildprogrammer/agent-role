@@ -4,7 +4,7 @@ description: Use when an agent must connect to configured SSH targets to run com
 compatibility: Agent Workflow Hub spec 1.0; requires Python 3.11+, AsyncSSH, and authorized Windows, macOS, or Linux SSH targets.
 metadata:
   spec-version: "1.0"
-  workflow-version: "0.1.0"
+  workflow-version: "0.2.0"
   display-name: "SSH Operations"
   execution-modes: '["single-agent"]'
   no-multi-agent-fallback: "serial"
@@ -39,9 +39,13 @@ metadata:
 
 私钥路径相对于 INI 解析；配置和 JSON 请求本身必须是已存在的绝对路径。关联步骤可声明工作目录、环境变量、依赖步骤、超时、`sudo`、PTY 与失败后继续策略，并通过 `${steps.<id>.stdout}` 引用已经完成且显式依赖的前序输出；引用值由目标 Shell 适配器引用，不拼成未转义文本。
 
+`exec` 只承担一个逻辑动作；包含多个安装、修改或验收节点的任务必须使用 `run-steps`，不能依赖一段复合 Shell 文本最后一条命令的退出码。单命令可通过 `--working-directory` 指定目录，通过可重复的 `--env NAME=VALUE` 显式传入普通环境变量。秘密使用 `--secret-env REMOTE_NAME=LOCAL_ENV_NAME` 从调用端环境读取；秘密值经 SSH stdin 传输并由 POSIX 或 PowerShell 在内存中恢复，不进入本地或远端命令文本，也不进入结果，并自动加入本次输出脱敏集合；`cmd.exe` 不支持该秘密传输方式。默认仍是非登录 Shell，不加载用户 profile；依赖 PATH 时显式传入 PATH 或使用绝对可执行路径。
+
 ## 输出与命名规则
 
 每次短命令、步骤、文件操作和多目标任务向 stdout 输出一个 UTF-8 JSON 对象，包含 `success|partial|failed|cancelled|needs-elevation`、目标、退出码、stdout、stderr、耗时和可证明的完成事实。进度只写 stderr。转发启动后先输出一个 `ready` JSON 对象，再保持进程直到关闭。
+
+命令输出超过上限时返回 `stdout_truncated|stderr_truncated`、已捕获字节数和上限，并把原本成功的命令标记为 `partial`，不得把截断证据声明为完整成功。超时或中止结果包含 `execution_state`、`cleanup_attempted`、`cleanup_verified` 和可得的 `remote_pid`；`timed_out_cleaned|aborted_cleaned` 表示已验证进程组退出，`timed_out_still_running|aborted_still_running` 表示仍在运行，`unknown` 表示不能证明远端执行状态。
 
 配置中出现的密码、sudo 密码和私钥口令按精确值脱敏，不进入命令行参数或结构化结果。远端程序自行输出的任意未知秘密无法可靠识别，Agent 必须按任务的数据敏感性控制命令和结果使用。
 
@@ -70,7 +74,7 @@ SFTP 支持 list、stat/lstat、read/write、mkdir、rename/move、chmod、symli
 1. 读取私有 INI 和请求，严格校验未知字段、凭据来源冲突、目标/组、跳板引用和环；不输出秘密。
 2. 对每个连接在真实握手执行 TOFU。按密码、私钥或 Agent 认证；仅在认证前网络连接失败时有限重试，认证失败和 Host Key 不匹配不重试。
 3. 显式 OS/Shell 先执行固定可用性探针；自动模式先探测 Windows，再用 `uname -s` 区分 Linux 与 macOS。不能确认时停止，不猜测 Shell。
-4. 单命令通过 AsyncSSH `run` 执行。有依赖的步骤在同一个远端 Shell 中依次执行，保持 cwd 和环境；每步使用随机 128-bit nonce 标记结果、限制输出，并只允许引用已完成依赖。
+4. 单命令通过 AsyncSSH `run` 执行且只承载一个逻辑动作；工作目录和环境由结构化参数包装。有依赖或多个验收点的操作使用 `run-steps`，在同一个远端 Shell 中依次执行，保持 cwd 和环境；每步使用随机 128-bit nonce 标记结果、限制输出，并只允许引用已完成依赖。步骤未声明超时时继承目标的 `timeout_seconds`。
 5. 文件操作直接使用 SFTP API；传输按选定 SFTP 或 SCP 语义执行。端口转发返回 ready 后保持，直到用户取消或连接关闭。
 6. 多目标按配置串行或有限并发；单个目标失败不取消其他目标，最终保持输入顺序并给出 `partial`。
 
@@ -84,7 +88,9 @@ SFTP 支持 list、stat/lstat、read/write、mkdir、rename/move、chmod、symli
 
 配置错误、缺依赖、DNS/TCP、认证、Host Key、跳板、Shell 探测、权限、超时和远端非零退出分别返回明确类别。认证失败不换凭据，Host Key 变化不覆盖，权限不足不尝试绕过。网络中断只重试尚未认证且尚未执行命令的连接；命令结果未知时不自动重跑可能产生副作用的命令。
 
-关联步骤在同一 Shell 中遇到超时、输出上限或连接关闭时停止该目标，并保留已经完成步骤。`on_failure=continue` 只适用于已获得明确非零退出的步骤，不把连接状态未知当成可继续。
+Linux/macOS 在 `setsid` 可用时为有限时命令建立独立进程组；超时、调用取消或步骤输出异常时先发送 TERM、在宽限期后发送 KILL，并验证进程组是否退出。平台或服务端不支持可靠清理时返回 `unknown`，不伪装成已停止。Windows 当前关闭 SSH 执行通道并返回 `unknown`，不承诺已经终止命令派生的全部进程。
+
+关联步骤在同一 Shell 中遇到超时、输出上限或连接关闭时停止该目标，取消流读取，并以有界等待关闭远端 Shell，同时保留已经完成步骤。`on_failure=continue` 只适用于已获得明确非零退出的步骤，不把超时、连接状态未知或输出不完整当成可继续。
 
 ## 重跑、幂等与覆盖策略
 
@@ -96,7 +102,7 @@ SCP 永远报告 `resume_supported=false`。多目标重跑只重跑用户或上
 
 Hub 合约验证和本工作流测试通过；doctor 不连接远端；AsyncSSH 版本和哈希锁固定。临时本地 SSH 服务端验证密码、密钥、TOFU 首次记录与变更拒绝、跳板清理、命令、关联步骤、SFTP/SCP 和三类转发。Windows、macOS、Linux 真实设备按实际执行分别标记 `verified|documented|not-tested`，不得以临时服务端替代实机声明。
 
-普通写入无通用确认；删除和明确高影响命令仅一次确认。Agent Forwarding 默认关闭；Windows 权限不足返回 `needs-elevation`；SCP 不声明续传；任何凭据都不进入命令行和 JSON 输出。
+普通写入无通用确认；删除和明确高影响命令仅一次确认。Agent Forwarding 默认关闭；Windows 权限不足返回 `needs-elevation`；SCP 不声明续传；任何凭据都不进入命令行和 JSON 输出。验收覆盖复合动作逐步判定、默认超时继承、有界关闭、POSIX 超时清理状态、秘密环境变量脱敏以及输出截断降级为 `partial`。
 
 ## 清理方式
 

@@ -24,7 +24,7 @@ def test_skill_contract_is_complete() -> None:
     frontmatter, body = parse_markdown(SKILL)
     contract = validate_skill(SKILL, frontmatter, body)
     assert contract.name == "ssh-operations"
-    assert contract.metadata["workflow-version"] == "0.1.0"
+    assert contract.metadata["workflow-version"] == "0.2.0"
     assert json.loads(contract.metadata["required-capabilities"]) == ["python.asyncssh"]
     assert json.loads(contract.metadata["supported-hosts"]) == [
         "codex", "openclaw", "claude-code", "hermes", "opencode"
@@ -43,3 +43,13 @@ def test_skill_records_platform_and_transport_boundaries() -> None:
     assert "SCP 不支持断点续传" in body
     assert "一次确认" in body
     assert "可独立使用，也可与其他工作流共享同一个 INI" in body
+
+
+def test_skill_records_reliable_execution_boundaries() -> None:
+    body = SKILL.read_text(encoding="utf-8")
+    assert "一个逻辑动作" in body
+    assert "run-steps" in body
+    assert "timed_out_cleaned" in body
+    assert "stdout_truncated" in body
+    assert "--working-directory" in body
+    assert "--secret-env" in body

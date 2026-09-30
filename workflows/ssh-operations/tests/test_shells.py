@@ -50,3 +50,15 @@ def test_explicit_shell_and_os_must_be_compatible() -> None:
     assert isinstance(shell_adapter("linux", "bash"), PosixShell)
     with pytest.raises(ValueError, match="incompatible"):
         shell_adapter("windows", "bash")
+
+
+def test_powershell_secret_environment_is_read_from_stdin() -> None:
+    wrapped = PowerShell().wrap_secret_environment("Write-Output ok", ("API_TOKEN",))
+    assert "[Console]::In.ReadLine()" in wrapped
+    assert "FromBase64String" in wrapped
+    assert "$env:API_TOKEN" in wrapped
+
+
+def test_cmd_rejects_secret_environment_transport() -> None:
+    with pytest.raises(ValueError, match="secret environment.*cmd"):
+        CmdShell().wrap_secret_environment("echo ok", ("API_TOKEN",))

@@ -82,6 +82,15 @@ class CommandResult:
     target: str | None = None
     step_id: str | None = None
     error: str | None = None
+    execution_state: str | None = None
+    remote_pid: int | None = None
+    cleanup_attempted: bool = False
+    cleanup_verified: bool | None = None
+    stdout_truncated: bool = False
+    stderr_truncated: bool = False
+    captured_stdout_bytes: int = 0
+    captured_stderr_bytes: int = 0
+    output_limit_bytes: int | None = None
 
 
 @dataclass(frozen=True)

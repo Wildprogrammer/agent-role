@@ -44,6 +44,77 @@ def test_exec_prints_one_json_object(monkeypatch, capsys, tmp_path: Path) -> Non
     assert captured.err == ""
 
 
+def test_exec_accepts_structured_directory_environment_and_secret_environment(
+    monkeypatch, capsys, tmp_path: Path
+) -> None:
+    config = _config(tmp_path)
+
+    class CapturingService(FakeService):
+        def __init__(self):
+            self.kwargs = None
+
+        async def exec_many(self, targets, command, **kwargs):
+            self.kwargs = kwargs
+            return OperationResult(
+                "success",
+                (CommandResult("success", stdout="token-value", target=targets[0]),),
+            )
+
+    service = CapturingService()
+    monkeypatch.setattr(cli, "build_service", lambda _: service)
+    monkeypatch.setenv("LOCAL_TOKEN", "token-value")
+    code = cli.main(
+        [
+            "exec", "--config", str(config), "--target", "linux",
+            "--command", "printenv", "--working-directory", "/srv/app",
+            "--env", "MODE=test", "--secret-env", "API_TOKEN=LOCAL_TOKEN",
+        ]
+    )
+    report = json.loads(capsys.readouterr().out)
+    assert code == 0
+    assert service.kwargs["working_directory"] == "/srv/app"
+    assert service.kwargs["environment"] == {"MODE": "test"}
+    assert service.kwargs["secret_environment"] == {"API_TOKEN": "token-value"}
+    assert report["results"][0]["stdout"] == "***"
+
+
+def test_exec_rejects_missing_secret_environment_without_exposing_values(
+    monkeypatch, capsys, tmp_path: Path
+) -> None:
+    config = _config(tmp_path)
+    monkeypatch.delenv("MISSING_TOKEN", raising=False)
+    code = cli.main(
+        [
+            "exec", "--config", str(config), "--target", "linux",
+            "--command", "true", "--secret-env", "TOKEN=MISSING_TOKEN",
+        ]
+    )
+    report = json.loads(capsys.readouterr().out)
+    assert code == 2
+    assert report["status"] == "invalid-request"
+    assert "MISSING_TOKEN" in report["error"]
+
+
+def test_exec_rejects_duplicate_secret_environment_names(
+    monkeypatch, capsys, tmp_path: Path
+) -> None:
+    config = _config(tmp_path)
+    monkeypatch.setenv("TOKEN_ONE", "one")
+    monkeypatch.setenv("TOKEN_TWO", "two")
+    code = cli.main(
+        [
+            "exec", "--config", str(config), "--target", "linux",
+            "--command", "true",
+            "--secret-env", "TOKEN=TOKEN_ONE",
+            "--secret-env", "TOKEN=TOKEN_TWO",
+        ]
+    )
+    report = json.loads(capsys.readouterr().out)
+    assert code == 2
+    assert report["status"] == "invalid-request"
+    assert "duplicate remote environment name: TOKEN" in report["error"]
+
+
 def test_relative_config_is_rejected_without_traceback(capsys) -> None:
     code = cli.main(
         ["exec", "--config", "ssh.ini", "--target", "linux", "--command", "hostname"]

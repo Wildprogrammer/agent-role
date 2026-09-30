@@ -6,6 +6,8 @@ import base64
 import dataclasses
 import importlib.metadata
 import json
+import os
+import re
 import sys
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -77,6 +79,9 @@ def _parser() -> argparse.ArgumentParser:
     execute.add_argument("--command", required=True)
     execute.add_argument("--sudo", action="store_true")
     execute.add_argument("--timeout", type=float)
+    execute.add_argument("--working-directory")
+    execute.add_argument("--env", action="append", default=[])
+    execute.add_argument("--secret-env", action="append", default=[])
     execute.add_argument("--max-parallel", type=int, default=1)
     execute.add_argument("--high-impact", action="store_true")
     execute.add_argument("--confirmed-high-impact", action="store_true")
@@ -85,6 +90,42 @@ def _parser() -> argparse.ArgumentParser:
         child.add_argument("--config", type=Path, required=True)
         child.add_argument("--request", type=Path, required=True)
     return parser
+
+
+_ENVIRONMENT_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
+
+
+def _parse_assignment(value: str, *, label: str) -> tuple[str, str]:
+    if "=" not in value:
+        raise ConfigError(f"{label} must use NAME=VALUE syntax")
+    name, assigned = value.split("=", 1)
+    if not _ENVIRONMENT_NAME.fullmatch(name):
+        raise ConfigError(f"invalid remote environment name: {name}")
+    return name, assigned
+
+
+def _exec_environment(
+    plain_values: Sequence[str], secret_values: Sequence[str]
+) -> tuple[dict[str, str], dict[str, str], set[str]]:
+    environment: dict[str, str] = {}
+    secret_environment: dict[str, str] = {}
+    redactions: set[str] = set()
+    for value in plain_values:
+        name, assigned = _parse_assignment(value, label="--env")
+        if name in environment:
+            raise ConfigError(f"duplicate remote environment name: {name}")
+        environment[name] = assigned
+    for value in secret_values:
+        name, source = _parse_assignment(value, label="--secret-env")
+        if name in environment or name in secret_environment:
+            raise ConfigError(f"duplicate remote environment name: {name}")
+        if source not in os.environ:
+            raise ConfigError(f"environment variable {source} is not set")
+        secret = os.environ[source]
+        secret_environment[name] = secret
+        if secret:
+            redactions.add(secret)
+    return environment, secret_environment, redactions
 
 
 def _aggregate(items: list[dict[str, Any]]) -> OperationResult:
@@ -271,11 +312,18 @@ def main(argv: Sequence[str] | None = None) -> int:
             _print(report)
             return _exit_code(report["status"])
         service = build_service(args.config)
+        extra_secrets: set[str] = set()
         if args.subcommand == "exec":
+            environment, secret_environment, extra_secrets = _exec_environment(
+                args.env, args.secret_env
+            )
             result = asyncio.run(
                 service.exec_many(
                     args.target, args.command, max_parallel=args.max_parallel,
                     timeout=args.timeout, sudo=args.sudo,
+                    working_directory=args.working_directory,
+                    environment=environment,
+                    secret_environment=secret_environment,
                     explicit_high_impact=args.high_impact,
                     confirmed_high_impact=args.confirmed_high_impact,
                 )
@@ -302,7 +350,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             else:
                 asyncio.run(_forward(service, request))
                 return 0
-        _print(result, secrets=_secrets(service))
+        _print(result, secrets=_secrets(service) | extra_secrets)
         return _exit_code(result.status)
     except HighImpactConfirmationRequired as exc:
         _print({"status": "needs-confirmation", "error": str(exc)})

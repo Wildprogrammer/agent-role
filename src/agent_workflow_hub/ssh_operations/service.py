@@ -131,6 +131,9 @@ class SSHOperationsService:
         *,
         timeout: float | None,
         sudo: bool,
+        working_directory: str | None,
+        environment: Mapping[str, str] | None,
+        secret_environment: Mapping[str, str] | None,
     ) -> CommandResult:
         if self.operation_worker is not None:
             return await self.operation_worker(target_name)
@@ -141,7 +144,14 @@ class SSHOperationsService:
             adapter = await self._detect_adapter(connection, target_name)
             return await CommandExecutor(
                 connection, adapter, sudo_password=target.sudo_password
-            ).exec(command, timeout=timeout or target.timeout_seconds, sudo=sudo)
+            ).exec(
+                command,
+                timeout=timeout if timeout is not None else target.timeout_seconds,
+                sudo=sudo,
+                working_directory=working_directory,
+                environment=environment,
+                secret_environment=secret_environment,
+            )
 
     async def exec_many(
         self,
@@ -151,6 +161,9 @@ class SSHOperationsService:
         max_parallel: int = 1,
         timeout: float | None = None,
         sudo: bool = False,
+        working_directory: str | None = None,
+        environment: Mapping[str, str] | None = None,
+        secret_environment: Mapping[str, str] | None = None,
         explicit_high_impact: bool = False,
         confirmed_high_impact: bool = False,
     ) -> OperationResult:
@@ -168,7 +181,10 @@ class SSHOperationsService:
             async with semaphore:
                 try:
                     result = await self._exec_target(
-                        target_name, command, timeout=timeout, sudo=sudo
+                        target_name, command, timeout=timeout, sudo=sudo,
+                        working_directory=working_directory,
+                        environment=environment,
+                        secret_environment=secret_environment,
                     )
                     return replace(result, target=target_name)
                 except asyncio.CancelledError:
@@ -178,9 +194,10 @@ class SSHOperationsService:
 
         results = tuple(await asyncio.gather(*(run_one(name) for name in ordered)))
         successes = sum(item.status == "success" for item in results)
+        usable = sum(item.status in {"success", "partial"} for item in results)
         if successes == len(results):
             status = "success"
-        elif successes:
+        elif usable:
             status = "partial"
         elif results and all(item.status == "cancelled" for item in results):
             status = "cancelled"
@@ -208,7 +225,7 @@ class SSHOperationsService:
                         adapter = await self._detect_adapter(connection, target_name)
                         results = await CommandExecutor(
                             connection, adapter, sudo_password=target.sudo_password
-                        ).run_steps(steps)
+                        ).run_steps(steps, default_timeout=target.timeout_seconds)
                     status = "success" if results and all(
                         item.status == "success" for item in results
                     ) else "failed"

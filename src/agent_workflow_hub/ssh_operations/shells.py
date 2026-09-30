@@ -38,6 +38,9 @@ class ShellAdapter:
     def frame(self, command: str, token: str) -> str:
         raise NotImplementedError
 
+    def wrap_secret_environment(self, command: str, names: tuple[str, ...]) -> str:
+        raise NotImplementedError
+
     @property
     def exit_command(self) -> str:
         return "exit"
@@ -78,6 +81,33 @@ class PosixShell(ShellAdapter):
             f"printf '%s:%s\\n' '__AWH_{token}_END__' \"$__awh_status\""
         )
 
+    def wrap_secret_environment(self, command: str, names: tuple[str, ...]) -> str:
+        prefixes = [
+            "command -v base64 >/dev/null 2>&1 || exit 126",
+            (
+                "__awh_b64_decode() { "
+                "if printf '' | base64 --decode >/dev/null 2>&1; then "
+                "base64 --decode; else base64 -D; fi; }"
+            ),
+        ]
+        for index, name in enumerate(names):
+            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
+                raise ValueError(f"invalid environment name: {name}")
+            encoded = f"__awh_secret_{index}"
+            decoded = f"__awh_decoded_{index}"
+            prefixes.extend(
+                (
+                    f"IFS= read -r {encoded} || exit 126",
+                    (
+                        f'{decoded}=$(printf \'%s\' "${encoded}" | '
+                        "__awh_b64_decode) || exit 126"
+                    ),
+                    f'export {name}="${decoded}"',
+                    f"unset {encoded} {decoded}",
+                )
+            )
+        return "; ".join((*prefixes, command))
+
 
 class PowerShell(ShellAdapter):
     def __init__(self) -> None:
@@ -113,6 +143,28 @@ class PowerShell(ShellAdapter):
             f"[Console]::Error.WriteLine('__AWH_{token}_ERR_END__'); "
             f"Write-Output ('__AWH_{token}_END__:' + $__awh_status)"
         )
+
+    def wrap_secret_environment(self, command: str, names: tuple[str, ...]) -> str:
+        prefixes: list[str] = []
+        for index, name in enumerate(names):
+            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
+                raise ValueError(f"invalid environment name: {name}")
+            variable = f"__awhSecret{index}"
+            prefixes.extend(
+                (
+                    f"${variable}=[Console]::In.ReadLine()",
+                    (
+                        f"if ($null -eq ${variable}) "
+                        "{throw 'missing secret environment input'}"
+                    ),
+                    (
+                        f"$env:{name}=[Text.Encoding]::UTF8.GetString("
+                        f"[Convert]::FromBase64String(${variable}))"
+                    ),
+                    f"Remove-Variable {variable}",
+                )
+            )
+        return "; ".join((*prefixes, command))
 
 
 class CmdShell(ShellAdapter):
@@ -150,6 +202,10 @@ class CmdShell(ShellAdapter):
             f"echo __AWH_{token}_ERR_END__ 1>&2 & "
             f"echo __AWH_{token}_END__:%__awh_status%"
         )
+
+    def wrap_secret_environment(self, command: str, names: tuple[str, ...]) -> str:
+        del command, names
+        raise ValueError("secret environment transport is unsupported for cmd")
 
 
 def shell_adapter(remote_os: str, shell: str) -> ShellAdapter:
