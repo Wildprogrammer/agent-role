@@ -1,0 +1,55 @@
+{
+  "schema_version": "1.0",
+  "name": "settings-demo",
+  "description": "Open com.example.settings and verify a harmless target screen.",
+  "source_surface": "agent-device-cli",
+  "target_platform": "android",
+  "device": {
+    "serial": "emulator-5554",
+    "transport": "emulator",
+    "viewport": {
+      "width": 1080,
+      "height": 2400,
+      "orientation": "portrait",
+      "density": 2.75
+    }
+  },
+  "parameters": [
+    {
+      "name": "package",
+      "default": "com.example.settings",
+      "sensitive": false
+    }
+  ],
+  "steps": [
+    {
+      "id": "open-settings",
+      "runner": "agent-device",
+      "effect": "read",
+      "timeout_seconds": 15,
+      "script": "C:/path/to/flow.ad",
+      "assertion": {
+        "kind": "selector-visible",
+        "selector": "text=Settings",
+        "timeout_seconds": 10
+      }
+    },
+    {
+      "id": "open-network",
+      "runner": "airtest",
+      "effect": "read",
+      "timeout_seconds": 10,
+      "action": "click-image",
+      "template": "C:/path/to/icon.png",
+      "threshold": 0.85,
+      "assertion": {
+        "kind": "image-visible",
+        "template": "C:/path/to/icon.png",
+        "threshold": 0.85,
+        "timeout_seconds": 10
+      }
+    }
+  ],
+  "decision": "generate-only",
+  "effective_path_confirmed": true
+}

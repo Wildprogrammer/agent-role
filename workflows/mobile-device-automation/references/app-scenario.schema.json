@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/agent-role/mobile-device-automation/app-scenario.schema.json",
+  "title": "Linear reusable Android application scenario",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "app_id", "id", "description", "parameters", "components"],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "app_id": {"$ref": "#/$defs/identifier"},
+    "id": {"$ref": "#/$defs/identifier"},
+    "description": {"type": "string", "minLength": 1},
+    "parameters": {"type": "array", "items": {"$ref": "#/$defs/parameter"}},
+    "components": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/componentUse"}}
+  },
+  "$defs": {
+    "identifier": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$"},
+    "parameter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "sensitive"],
+      "properties": {
+        "name": {"$ref": "#/$defs/identifier"},
+        "default": {"type": ["string", "null"]},
+        "sensitive": {"type": "boolean"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"sensitive": {"const": true}}, "required": ["sensitive"]},
+          "then": {"not": {"required": ["default"]}}
+        }
+      ]
+    },
+    "componentUse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["use"],
+      "properties": {
+        "use": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}@[1-9][0-9]*$"},
+        "with": {
+          "type": "object",
+          "propertyNames": {"$ref": "#/$defs/identifier"},
+          "additionalProperties": {"$ref": "#/$defs/identifier"}
+        }
+      }
+    }
+  }
+}

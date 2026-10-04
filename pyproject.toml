@@ -38,5 +38,6 @@ testpaths = [
   "workflows/git-operations/tests",
   "workflows/ssh-operations/tests",
   "workflows/desktop-client-automation/tests",
+  "workflows/mobile-device-automation/tests",
 ]
 addopts = "-ra --import-mode=importlib"

@@ -15,9 +15,9 @@ integrity:
   locked_version: "1.4.3"
   source: "https://files.pythonhosted.org/packages/66/52/6affbca8e27276568013caab46c95177c77c4bf4ad43f4ad8388b70ba37e/airtest-1.4.3.tar.gz"
 systems:
-  os: {windows: "documented", macos: "unsupported-desktop-v1", linux: "unsupported-desktop-v1"}
-  arch: {x64: "documented", arm64: "unverified"}
-  runtimes: ["CPython 3.11 Windows x64 workflow-private runtime"]
+  os: {windows: "documented-desktop-and-mobile", macos: "documented-mobile-unverified", linux: "documented-mobile-unverified"}
+  arch: {x64: "documented", arm64: "documented-mobile-unverified"}
+  runtimes: ["CPython 3.11 workflow-private runtime"]
 hosts:
   codex: "conditional"
   openclaw: "conditional"
@@ -36,7 +36,7 @@ automation_status: "conditional"
 
 ## 能力用途和非目标
 
-用于 `desktop-client-automation` 在 Windows 上捕获窗口或显式主显示器桌面图片、把用户确认的有效桌面探索路径编译为 `.air` Python 脚本，并执行确定性回放和最终视觉断言。`Windows:///` 是 Airtest 无 HWND 的原生 Windows 桌面设备，不是对窗口模式的模拟兜底。它不是自然语言决策模型，不替代 Cua Driver 或宿主原生 Computer Use，也不承诺 macOS 桌面自动化。
+提供两个互不混淆的配置档：`desktop-client-automation` 在 Windows 上捕获窗口或显式主显示器桌面图片；`mobile-device-automation` 通过明确的 Android serial 连接真机或模拟器，捕获设备 framebuffer 并执行图片定位。桌面档可把用户确认的有效探索路径编译为 `.air` Python 脚本并执行确定性回放和最终视觉断言。`Windows:///` 是 Airtest 无 HWND 的原生 Windows 桌面设备；移动档使用 `Android:///`，不得点击主机上的模拟器窗口。Airtest 不是自然语言决策模型，不替代 Cua Driver、agent-device 或宿主原生 Computer Use，也不承诺 macOS 桌面自动化。
 
 ## 官方获取与文档
 
@@ -44,15 +44,15 @@ automation_status: "conditional"
 
 ## 系统、架构、运行时和硬件支持
 
-第一版仅面向 Windows x64。Airtest 1.4.3 锁定的 NumPy、OpenCV 和 Windows 依赖不适合作为当前系统 Python 3.13 的默认安装，因此使用工作流私有 CPython 3.11 运行时。macOS 只能运行部分 Airtest 工具，不代表已支持 macOS 桌面客户端目标。
+Windows x64 支持既有桌面档和 Android 移动档。macOS/Linux 只登记 Android 移动档，并且在本仓库仍为未实机验证；它们不因此获得桌面客户端回放能力。Airtest 1.4.3 锁定的 NumPy、OpenCV 和平台依赖不适合作为当前系统 Python 3.13 的默认安装，因此使用工作流私有 CPython 3.11 运行时。移动档通过 ADB 和显式 serial 访问 Android 真机或模拟器，不控制模拟器宿主窗口。
 
 ## 五种宿主兼容矩阵
 
-Codex、OpenClaw、Claude Code、Hermes 和 OpenCode 都可以在 Windows 上通过工作流 CLI 调用 Airtest，前提是工作流私有运行时和目标桌面会话已通过检测。宿主兼容状态不代表本机运行时就绪；生成的 Airtest 脚本可脱离探索 Agent 回放。
+Codex、OpenClaw、Claude Code、Hermes 和 OpenCode 都可以在 Windows 上通过工作流 CLI 调用桌面或 Android 移动档，前提是工作流私有运行时和目标会话已通过检测。macOS/Linux 宿主只能条件式调用未验证的 Android 移动档。宿主兼容状态不代表本机运行时或设备已经就绪；生成的 Airtest 脚本可脱离探索 Agent 回放。
 
 ## 只读检测
 
-在实际工作流解释器中读取 `airtest`、`pywinauto`、`opencv-contrib-python`、`psutil` 和 `pywin32` 的包版本；不截屏、不操作窗口、不安装软件。Cua MCP 或宿主原生 Computer Use surface 必须由当前 Agent 工具清单单独核对，Python doctor 不得从本地二进制推断 MCP 已连接。
+在实际工作流解释器中读取 `airtest`、`opencv-contrib-python` 及所选配置档需要的平台包版本；桌面档还检查 `pywinauto`、`psutil` 和 `pywin32`，移动档只读检查 ADB 与显式 serial 的可见性。检测不截屏、不操作窗口或设备、不安装软件。Cua MCP 或宿主原生 Computer Use surface 必须由当前 Agent 工具清单单独核对，Python doctor 不得从本地二进制推断 MCP 已连接。
 
 ## 各系统安装
 
@@ -63,24 +63,26 @@ uv venv <HUB_ROOT>/workspace/workflows/desktop-client-automation/runtime --pytho
 uv pip install --python <WORKFLOW_PYTHON> --require-hashes -r <HUB_ROOT>/workflows/desktop-client-automation/references/runtime-windows-py311.lock
 ```
 
-`<WORKFLOW_PYTHON>` 是上述运行时中的 `Scripts/python.exe`。不得安装 AirtestIDE，不得写宿主 MCP 配置，不得把依赖装入不兼容的系统 Python 3.13，也不得把 3.11 的 `site-packages` 注入其他 Python 版本。
+`<WORKFLOW_PYTHON>` 是上述运行时中的 `Scripts/python.exe`；非 Windows 主机使用对应的私有解释器路径和经过审核的平台锁文件。不得安装 AirtestIDE，不得写宿主 MCP 配置，不得把依赖装入不兼容的系统 Python 3.13，也不得把 3.11 的 `site-packages` 注入其他 Python 版本。移动档不会隐式安装 Android SDK、ADB 或设备驱动。
 
 ## 调用示例和成功判据
 
-成功判据包括：doctor 返回 `ready`；能够唯一绑定一个测试窗口，或在 Shell 已位于前台时绑定 `Windows:///` 的主显示器桌面并保存截图；桌面图片在每次输入前的新鲜主显示器截图中唯一匹配；编译器从确认轨迹生成新版本 `.air` 包；回放能够按应用策略启动或绑定目标、执行操作并通过用户确认的最终断言。桌面目标不要求 UIA，不发送 `Win+D`，被其他窗口遮挡时以 `desktop-not-foreground` 失败。
+桌面档成功判据保持不变：doctor 返回 `ready`；能够唯一绑定一个测试窗口，或在 Shell 已位于前台时绑定 `Windows:///` 的主显示器桌面并保存截图；桌面图片在每次输入前的新鲜主显示器截图中唯一匹配；编译器从确认轨迹生成新版本 `.air` 包；回放能够按应用策略启动或绑定目标、执行操作并通过用户确认的最终断言。桌面目标不要求 UIA，不发送 `Win+D`，被其他窗口遮挡时以 `desktop-not-foreground` 失败。
+
+移动档必须用 `Android:///<SERIAL>` 唯一连接目标，在新鲜设备截图中唯一匹配模板，并在点击前再次截取 framebuffer 和重新匹配；只使用第二次唯一匹配的中心点，绝不使用录制时坐标。点击后保存第三张设备截图并验证状态。移动档不得点击主机上的模拟器窗口，不得绕过安全界面或 Android 权限。
 
 ## 权限、网络、数据和遥测
 
-核心运行不联网。窗口截图、输入、文本剪贴板和脚本参数只保存在工作流 staging 或输出包；敏感输入不写入轨迹、图片模板、参数和日志。Airtest 不替代目标应用权限，Cua 权限模式和宿主级强制确认策略继续生效。
+核心运行不联网。窗口或设备 framebuffer 截图、输入、文本剪贴板和脚本参数只保存在工作流 staging 或输出包；敏感输入不写入轨迹、图片模板、参数和日志。Airtest 不替代目标应用或 Android 系统权限，Cua 权限模式和宿主级强制确认策略继续生效。
 
 ## 卸载或回滚
 
-回滚只删除 `workspace/workflows/desktop-client-automation/runtime/` 中的工作流私有运行时。生成的 `.air` 输出、用户配置、目标应用和其他工作流运行时不自动删除。
+回滚只删除对应工作流创建且身份匹配的私有 Airtest 运行时。生成的 `.air` 输出、用户配置、ADB 配置、设备数据、目标应用和其他工作流运行时不自动删除。
 
 ## 已知限制
 
-Airtest 回放第一版不支持 macOS/Linux 桌面目标、通用二进制剪贴板、任意流程图、无限循环或身份验证自动输入。Cua 可在 macOS 动态操作桌面，不代表 Airtest 已具备该回放后端。DPI、主题、字体、语言、显示器布局和应用升级可能导致图片锚点漂移；生成但未回放的脚本只能标记为未验证。
+Airtest 回放第一版不支持 macOS/Linux 桌面目标、iOS、通用二进制剪贴板、任意流程图、无限循环或身份验证自动输入。Cua 可在 macOS 动态操作桌面，不代表 Airtest 已具备该回放后端。DPI、主题、字体、语言、显示器布局、设备分辨率和应用升级可能导致图片锚点漂移；生成但未回放的脚本只能标记为未验证。系统安全界面或禁用截图的页面必须显式失败，不得尝试绕过。
 
 ## 替代能力
 
-Airtest 缺失时返回 `needs-airtest`。动态探索使用 Cua Driver MCP，Codex 原生 Computer Use 只作为兼容路径；macOS 请求确定性回放时返回 `needs-replay-backend`。图片失败不静默回退到 PyAutoGUI、Windows-MCP、OculiX 或坐标点击实现。
+Airtest 缺失时返回 `needs-airtest`。桌面动态探索使用 Cua Driver MCP，移动语义探索优先使用 `cli.agent-device`；Codex 原生 Computer Use 只作为兼容路径。macOS 请求桌面确定性回放时返回 `needs-replay-backend`。无论桌面还是 Android，图片失败都不静默回退到 PyAutoGUI、Windows-MCP、OculiX、宿主模拟器窗口或保存坐标点击。

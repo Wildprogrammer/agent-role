@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/agent-role/mobile-device-automation/app-component.schema.json",
+  "title": "Reusable Android application component",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "app_id", "id", "version", "effect", "timeout_seconds", "parameters", "implementations", "postcondition"],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "app_id": {"$ref": "#/$defs/identifier"},
+    "id": {"$ref": "#/$defs/identifier"},
+    "version": {"type": "integer", "minimum": 1},
+    "effect": {"$ref": "#/$defs/effect"},
+    "timeout_seconds": {"$ref": "#/$defs/positiveNumber"},
+    "parameters": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/identifier"}},
+    "precondition": {"$ref": "#/$defs/selectorAssertion"},
+    "already_complete": {"$ref": "#/$defs/selectorAssertion"},
+    "implementations": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "default": {"$ref": "#/$defs/implementation"},
+        "direct-ime": {"$ref": "#/$defs/implementation"},
+        "pinyin-fallback": {"$ref": "#/$defs/implementation"}
+      }
+    },
+    "recovery": {"$ref": "#/$defs/recovery"},
+    "postcondition": {"$ref": "#/$defs/selectorAssertion"}
+  },
+  "allOf": [
+    {
+      "if": {"not": {"required": ["precondition"]}},
+      "then": {
+        "required": ["already_complete"],
+        "properties": {"effect": {"enum": ["none", "read", "idempotent"]}}
+      }
+    }
+  ],
+  "$defs": {
+    "identifier": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$"},
+    "positiveNumber": {"type": "number", "exclusiveMinimum": 0},
+    "effect": {"enum": ["none", "read", "idempotent", "create", "submit", "send", "delete"]},
+    "relativeAdPath": {
+      "type": "string",
+      "pattern": "^(?!/)(?![A-Za-z]:)(?!.*(?:^|[\\/])\\.\\.(?:[\\/]|$))[^\\r\\n]+\\.ad$"
+    },
+    "selectorAssertion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "selector", "timeout_seconds"],
+      "properties": {
+        "kind": {"const": "selector-visible"},
+        "selector": {"type": "string", "minLength": 1},
+        "timeout_seconds": {"$ref": "#/$defs/positiveNumber"}
+      }
+    },
+    "implementation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["script"],
+      "properties": {"script": {"$ref": "#/$defs/relativeAdPath"}}
+    },
+    "recovery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["script", "postcondition"],
+      "properties": {
+        "script": {"$ref": "#/$defs/relativeAdPath"},
+        "postcondition": {"$ref": "#/$defs/selectorAssertion"}
+      }
+    }
+  }
+}

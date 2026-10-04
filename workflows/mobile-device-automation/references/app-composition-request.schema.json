@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/agent-role/mobile-device-automation/app-composition-request.schema.json",
+  "title": "Mobile application component composition request",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "scenario", "catalog_root", "text_input_mode", "source_surface", "target_platform", "device", "decision", "effective_path_confirmed"],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "scenario": {"$ref": "#/$defs/absolutePath"},
+    "catalog_root": {"$ref": "#/$defs/absolutePath"},
+    "text_input_mode": {"enum": ["direct-ime", "pinyin-fallback"]},
+    "source_surface": {"enum": ["agent-device-mcp", "agent-device-cli"]},
+    "target_platform": {"const": "android"},
+    "device": {"$ref": "#/$defs/device"},
+    "decision": {"enum": ["generate-only", "generate-and-replay"]},
+    "effective_path_confirmed": {"const": true}
+  },
+  "$defs": {
+    "absolutePath": {"type": "string", "pattern": "^(?:[A-Za-z]:[\\/]|/)"},
+    "positiveNumber": {"type": "number", "exclusiveMinimum": 0},
+    "viewport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["width", "height", "orientation", "density"],
+      "properties": {
+        "width": {"type": "integer", "minimum": 1},
+        "height": {"type": "integer", "minimum": 1},
+        "orientation": {"enum": ["portrait", "landscape"]},
+        "density": {"$ref": "#/$defs/positiveNumber"}
+      }
+    },
+    "device": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["serial", "transport", "viewport"],
+      "properties": {
+        "serial": {"type": "string", "minLength": 1},
+        "transport": {"enum": ["usb", "wireless", "emulator"]},
+        "viewport": {"$ref": "#/$defs/viewport"}
+      },
+      "allOf": [
+        {"if": {"properties": {"transport": {"const": "usb"}}, "required": ["transport"]}, "then": {"properties": {"serial": {"pattern": "^[A-Za-z0-9._-]+$"}}}},
+        {"if": {"properties": {"transport": {"const": "wireless"}}, "required": ["transport"]}, "then": {"properties": {"serial": {"pattern": "^(?:[^\\s:]+|\\[[0-9A-Fa-f:]+\\]):[0-9]{1,5}$"}}}},
+        {"if": {"properties": {"transport": {"const": "emulator"}}, "required": ["transport"]}, "then": {"properties": {"serial": {"pattern": "^emulator-[0-9]+$"}}}}
+      ]
+    }
+  }
+}

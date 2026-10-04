@@ -90,14 +90,16 @@ def test_skill_uses_cua_for_cross_host_exploration_and_airtest_for_windows_repla
         assert f"## {heading}" in body
 
 
-def test_airtest_is_host_independent_but_remains_windows_desktop_only() -> None:
+def test_airtest_keeps_windows_desktop_support_while_adding_mobile_profiles() -> None:
     capability = load_repository_catalog(REPOSITORY_ROOT).capabilities["python.airtest"]
     assert set(capability.hosts.values()) == {"conditional"}
     assert capability.frontmatter["systems"]["os"] == {
-        "windows": "documented",
-        "macos": "unsupported-desktop-v1",
-        "linux": "unsupported-desktop-v1",
+        "windows": "documented-desktop-and-mobile",
+        "macos": "documented-mobile-unverified",
+        "linux": "documented-mobile-unverified",
     }
+    assert "macOS/Linux 桌面目标" in capability.body
+    assert "不支持" in capability.body
 
 
 def test_documents_native_desktop_target_contract() -> None:
@@ -122,7 +124,8 @@ def test_documents_native_desktop_target_contract() -> None:
     assert "get_desktop_state" in cua
     assert "display_id" in cua and "primary" in cua
     assert "Windows:///" in airtest
-    assert "unsupported-desktop-v1" in airtest
+    assert "macOS/Linux 桌面目标" in airtest
+    assert "不支持" in airtest
 
 
 def test_skill_does_not_duplicate_cua_actions_in_python() -> None:

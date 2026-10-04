@@ -74,6 +74,7 @@ The rows below are catalogued workflows. Dynamic validation determines their cur
 | `mysql-operations` | Catalogued workflow. Independently inspect one externally configured MySQL target through fixed metadata/read, structured DML, and guarded migration tools. |
 | `ssh-operations` | Catalogued workflow. Connect to configured Windows, macOS, or Linux SSH targets to run commands and related steps, manage files through SFTP/SCP, traverse jump hosts, and open explicit port forwarding with TOFU host-key protection and one confirmation only for high-impact operations. |
 | `desktop-client-automation` | Catalogued workflow. Use Cua Driver MCP for cross-host Windows/macOS desktop exploration, preserve Codex native Computer Use as a compatibility path, and optionally compile confirmed Windows paths into Airtest scripts with deterministic replay and visual evidence. |
+| `mobile-device-automation` | Catalogued workflow. Explore Android physical devices and emulators through agent-device, then compile confirmed semantic and conditional Airtest image steps into a verified mixed replay with device-bound evidence. |
 
 ## Prepare / bootstrap
 

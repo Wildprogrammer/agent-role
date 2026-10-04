@@ -1,0 +1,199 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/agent-role/mobile-device-automation/replay-manifest.schema.json",
+  "title": "Mobile device automation replay manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "workflow",
+    "name",
+    "description",
+    "target_platform",
+    "status",
+    "decision",
+    "aggregate_effect",
+    "effective_path_confirmed",
+    "plan_sha256",
+    "generated_at",
+    "device",
+    "parameters",
+    "steps"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "workflow": {"const": "mobile-device-automation"},
+    "name": {"$ref": "#/$defs/identifier"},
+    "description": {"type": "string", "minLength": 1},
+    "target_platform": {"const": "android"},
+    "status": {"enum": ["generated-unverified", "replay-verified", "replay-failed"]},
+    "decision": {"enum": ["generate-only", "generate-and-replay"]},
+    "aggregate_effect": {"$ref": "#/$defs/effect"},
+    "effective_path_confirmed": {"const": true},
+    "plan_sha256": {"$ref": "#/$defs/sha256"},
+    "generated_at": {"type": "string", "format": "date-time"},
+    "device": {"$ref": "#/$defs/device"},
+    "parameters": {"type": "array", "items": {"$ref": "#/$defs/parameter"}},
+    "steps": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/step"}}
+  },
+  "$defs": {
+    "identifier": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$"},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "positiveNumber": {"type": "number", "exclusiveMinimum": 0},
+    "threshold": {"type": "number", "exclusiveMinimum": 0, "maximum": 1},
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!/)(?![A-Za-z]:)(?!.*(?:^|/)\\.\\.(?:/|$))[^\\\\]+$"
+    },
+    "effect": {"enum": ["none", "read", "idempotent", "create", "submit", "send", "delete"]},
+    "viewport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["width", "height", "orientation", "density"],
+      "properties": {
+        "width": {"type": "integer", "minimum": 1},
+        "height": {"type": "integer", "minimum": 1},
+        "orientation": {"enum": ["portrait", "landscape"]},
+        "density": {"$ref": "#/$defs/positiveNumber"}
+      }
+    },
+    "device": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["serial", "transport", "viewport"],
+      "properties": {
+        "serial": {"type": "string", "minLength": 1},
+        "transport": {"enum": ["usb", "wireless", "emulator"]},
+        "viewport": {"$ref": "#/$defs/viewport"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"transport": {"const": "usb"}}, "required": ["transport"]},
+          "then": {"properties": {"serial": {"pattern": "^[A-Za-z0-9._-]+$"}}}
+        },
+        {
+          "if": {"properties": {"transport": {"const": "wireless"}}, "required": ["transport"]},
+          "then": {"properties": {"serial": {"pattern": "^(?:[^\\s:]+|\\[[0-9A-Fa-f:]+\\]):[0-9]{1,5}$"}}}
+        },
+        {
+          "if": {"properties": {"transport": {"const": "emulator"}}, "required": ["transport"]},
+          "then": {"properties": {"serial": {"pattern": "^emulator-[0-9]+$"}}}
+        }
+      ]
+    },
+    "parameter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "default", "sensitive"],
+      "properties": {
+        "name": {"$ref": "#/$defs/identifier"},
+        "default": {"type": ["string", "null"]},
+        "sensitive": {"type": "boolean"}
+      }
+    },
+    "selectorAssertion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "selector", "timeout_seconds"],
+      "properties": {
+        "kind": {"const": "selector-visible"},
+        "selector": {"type": "string", "minLength": 1},
+        "timeout_seconds": {"$ref": "#/$defs/positiveNumber"}
+      }
+    },
+    "imageAssertion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "template", "source_sha256", "threshold", "timeout_seconds"],
+      "properties": {
+        "kind": {"const": "image-visible"},
+        "template": {"$ref": "#/$defs/relativePath"},
+        "source_sha256": {"$ref": "#/$defs/sha256"},
+        "threshold": {"$ref": "#/$defs/threshold"},
+        "timeout_seconds": {"$ref": "#/$defs/positiveNumber"}
+      }
+    },
+    "assertion": {
+      "oneOf": [
+        {"$ref": "#/$defs/selectorAssertion"},
+        {"$ref": "#/$defs/imageAssertion"}
+      ]
+    },
+    "componentRecovery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["script", "source_sha256", "postcondition"],
+      "properties": {
+        "script": {"$ref": "#/$defs/relativePath"},
+        "source_sha256": {"$ref": "#/$defs/sha256"},
+        "postcondition": {"$ref": "#/$defs/selectorAssertion"}
+      }
+    },
+    "componentLifecycle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["app_id", "id", "version", "occurrence_id", "descriptor_sha256", "text_input_mode", "implementation", "parameter_map", "precondition", "already_complete", "recovery"],
+      "properties": {
+        "app_id": {"$ref": "#/$defs/identifier"},
+        "id": {"$ref": "#/$defs/identifier"},
+        "version": {"type": "integer", "minimum": 1},
+        "occurrence_id": {"$ref": "#/$defs/identifier"},
+        "descriptor_sha256": {"$ref": "#/$defs/sha256"},
+        "text_input_mode": {"enum": ["direct-ime", "pinyin-fallback"]},
+        "implementation": {"enum": ["default", "direct-ime", "pinyin-fallback"]},
+        "parameter_map": {
+          "type": "object",
+          "propertyNames": {"$ref": "#/$defs/identifier"},
+          "additionalProperties": {"$ref": "#/$defs/identifier"}
+        },
+        "precondition": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/selectorAssertion"}]},
+        "already_complete": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/selectorAssertion"}]},
+        "recovery": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/componentRecovery"}]}
+      }
+    },
+    "agentDeviceStep": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "runner", "effect", "timeout_seconds", "script", "source_sha256", "assertion"],
+      "properties": {
+        "id": {"$ref": "#/$defs/identifier"},
+        "runner": {"const": "agent-device"},
+        "effect": {"$ref": "#/$defs/effect"},
+        "timeout_seconds": {"$ref": "#/$defs/positiveNumber"},
+        "script": {"$ref": "#/$defs/relativePath"},
+        "source_sha256": {"$ref": "#/$defs/sha256"},
+        "assertion": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/assertion"}]},
+        "component": {"$ref": "#/$defs/componentLifecycle"}
+      }
+    },
+    "airtestStep": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "runner", "effect", "timeout_seconds", "action", "template", "source_sha256", "threshold", "assertion"],
+      "properties": {
+        "id": {"$ref": "#/$defs/identifier"},
+        "runner": {"const": "airtest"},
+        "effect": {"$ref": "#/$defs/effect"},
+        "timeout_seconds": {"$ref": "#/$defs/positiveNumber"},
+        "action": {"enum": ["click-image", "wait-image"]},
+        "template": {"$ref": "#/$defs/relativePath"},
+        "source_sha256": {"$ref": "#/$defs/sha256"},
+        "threshold": {"$ref": "#/$defs/threshold"},
+        "assertion": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/assertion"}]}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"action": {"const": "click-image"}}, "required": ["action"]},
+          "then": {"properties": {"assertion": {"not": {"type": "null"}}}}
+        }
+      ]
+    },
+    "step": {
+      "oneOf": [
+        {"$ref": "#/$defs/agentDeviceStep"},
+        {"$ref": "#/$defs/airtestStep"}
+      ]
+    }
+  }
+}

@@ -1,0 +1,6 @@
+# unverified-runtime-lock
+# Target: CPython 3.11 / x86_64-unknown-linux-gnu
+# Verified with uv 0.12.17 on 2026-10-03.
+# Airtest 1.4.3 requires pywin32 unconditionally, but pywin32 publishes no
+# Linux x64 wheel. Do not use this marker file with --require-hashes.
+# Keep runtime-mobile-py311.in as the source-level adapter declaration.

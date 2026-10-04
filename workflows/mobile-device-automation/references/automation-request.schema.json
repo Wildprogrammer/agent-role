@@ -1,0 +1,188 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/agent-role/mobile-device-automation/automation-request.schema.json",
+  "title": "Mobile device automation request",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "name",
+    "description",
+    "source_surface",
+    "target_platform",
+    "device",
+    "steps",
+    "decision",
+    "effective_path_confirmed"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "name": {"$ref": "#/$defs/identifier"},
+    "description": {"type": "string", "minLength": 1},
+    "source_surface": {"enum": ["agent-device-mcp", "agent-device-cli"]},
+    "target_platform": {"const": "android"},
+    "device": {"$ref": "#/$defs/device"},
+    "parameters": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/parameter"},
+      "default": []
+    },
+    "steps": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/step"}
+    },
+    "decision": {"enum": ["generate-only", "generate-and-replay"]},
+    "effective_path_confirmed": {"const": true}
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+    },
+    "positiveNumber": {
+      "type": "number",
+      "exclusiveMinimum": 0
+    },
+    "threshold": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "maximum": 1
+    },
+    "absolutePath": {
+      "type": "string",
+      "pattern": "^(?:[A-Za-z]:[\\\\/]|/)"
+    },
+    "effect": {
+      "enum": ["none", "read", "idempotent", "create", "submit", "send", "delete"]
+    },
+    "viewport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["width", "height", "orientation", "density"],
+      "properties": {
+        "width": {"type": "integer", "minimum": 1},
+        "height": {"type": "integer", "minimum": 1},
+        "orientation": {"enum": ["portrait", "landscape"]},
+        "density": {"$ref": "#/$defs/positiveNumber"}
+      }
+    },
+    "device": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["serial", "transport", "viewport"],
+      "properties": {
+        "serial": {"type": "string", "minLength": 1},
+        "transport": {"enum": ["usb", "wireless", "emulator"]},
+        "viewport": {"$ref": "#/$defs/viewport"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"transport": {"const": "usb"}}, "required": ["transport"]},
+          "then": {"properties": {"serial": {"pattern": "^[A-Za-z0-9._-]+$"}}}
+        },
+        {
+          "if": {"properties": {"transport": {"const": "wireless"}}, "required": ["transport"]},
+          "then": {"properties": {"serial": {"pattern": "^(?:[^\\s:]+|\\[[0-9A-Fa-f:]+\\]):[0-9]{1,5}$"}}}
+        },
+        {
+          "if": {"properties": {"transport": {"const": "emulator"}}, "required": ["transport"]},
+          "then": {"properties": {"serial": {"pattern": "^emulator-[0-9]+$"}}}
+        }
+      ]
+    },
+    "parameter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "sensitive"],
+      "properties": {
+        "name": {"$ref": "#/$defs/identifier"},
+        "default": {"type": ["string", "null"]},
+        "sensitive": {"type": "boolean"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"sensitive": {"const": true}}, "required": ["sensitive"]},
+          "then": {"not": {"required": ["default"]}}
+        }
+      ]
+    },
+    "selectorAssertion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "selector", "timeout_seconds"],
+      "properties": {
+        "kind": {"const": "selector-visible"},
+        "selector": {"type": "string", "minLength": 1},
+        "timeout_seconds": {"$ref": "#/$defs/positiveNumber"}
+      }
+    },
+    "imageAssertion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "template", "threshold", "timeout_seconds"],
+      "properties": {
+        "kind": {"const": "image-visible"},
+        "template": {"$ref": "#/$defs/absolutePath"},
+        "threshold": {"$ref": "#/$defs/threshold"},
+        "timeout_seconds": {"$ref": "#/$defs/positiveNumber"}
+      }
+    },
+    "assertion": {
+      "oneOf": [
+        {"$ref": "#/$defs/selectorAssertion"},
+        {"$ref": "#/$defs/imageAssertion"}
+      ]
+    },
+    "agentDeviceStep": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "runner", "effect", "timeout_seconds", "script"],
+      "properties": {
+        "id": {"$ref": "#/$defs/identifier"},
+        "runner": {"const": "agent-device"},
+        "effect": {"$ref": "#/$defs/effect"},
+        "timeout_seconds": {"$ref": "#/$defs/positiveNumber"},
+        "script": {
+          "allOf": [
+            {"$ref": "#/$defs/absolutePath"},
+            {"pattern": "(?i)\\.ad$"}
+          ]
+        },
+        "assertion": {"$ref": "#/$defs/assertion"}
+      }
+    },
+    "airtestStep": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "runner", "effect", "timeout_seconds", "action", "template", "threshold"],
+      "properties": {
+        "id": {"$ref": "#/$defs/identifier"},
+        "runner": {"const": "airtest"},
+        "effect": {"$ref": "#/$defs/effect"},
+        "timeout_seconds": {"$ref": "#/$defs/positiveNumber"},
+        "action": {"enum": ["click-image", "wait-image"]},
+        "template": {
+          "allOf": [
+            {"$ref": "#/$defs/absolutePath"},
+            {"pattern": "(?i)\\.(?:png|jpe?g)$"}
+          ]
+        },
+        "threshold": {"$ref": "#/$defs/threshold"},
+        "assertion": {"$ref": "#/$defs/assertion"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"action": {"const": "click-image"}}, "required": ["action"]},
+          "then": {"required": ["assertion"]}
+        }
+      ]
+    },
+    "step": {
+      "oneOf": [
+        {"$ref": "#/$defs/agentDeviceStep"},
+        {"$ref": "#/$defs/airtestStep"}
+      ]
+    }
+  }
+}

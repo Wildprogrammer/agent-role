@@ -1,0 +1,20 @@
+{
+  "schema_version": "1.0",
+  "scenario": "C:/path/to/example-app/scenarios/home.yaml",
+  "catalog_root": "C:/path/to/example-app",
+  "text_input_mode": "direct-ime",
+  "source_surface": "agent-device-cli",
+  "target_platform": "android",
+  "device": {
+    "serial": "emulator-5554",
+    "transport": "emulator",
+    "viewport": {
+      "width": 1080,
+      "height": 2400,
+      "orientation": "portrait",
+      "density": 2.75
+    }
+  },
+  "decision": "generate-only",
+  "effective_path_confirmed": true
+}

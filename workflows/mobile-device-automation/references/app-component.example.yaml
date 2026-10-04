@@ -1,0 +1,18 @@
+schema_version: "1.0"
+app_id: example-app
+id: ensure-home
+version: 1
+effect: idempotent
+timeout_seconds: 15
+parameters: []
+already_complete:
+  kind: selector-visible
+  selector: id=home-marker
+  timeout_seconds: 2
+implementations:
+  default:
+    script: app-component-action.example.ad
+postcondition:
+  kind: selector-visible
+  selector: id=home-marker
+  timeout_seconds: 5

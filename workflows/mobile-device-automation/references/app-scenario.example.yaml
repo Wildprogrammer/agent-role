@@ -1,0 +1,7 @@
+schema_version: "1.0"
+app_id: example-app
+id: home
+description: Normalize the example application to its home state.
+parameters: []
+components:
+  - use: ensure-home@1
