@@ -69,6 +69,7 @@ agent-role 的 README、工作流说明和相关网页
 | `meeting-notes` | 转写已授权的会议音视频，经人工审核后生成摘要和 Obsidian 会议记录。 | 会议归档、知识沉淀 |
 | `mysql-operations` | 查询或操作用户配置的 MySQL 数据库，并保留数据库自身权限边界。 | 数据核查、业务运维、测试准备 |
 | `requirements-analysis` | 澄清需求歧义，结合授权资料分析需求并生成可评审用例。 | 开发准备、测试设计、方案评审 |
+| `specialized-agent-deployment` | 把一个主工作流、明确选择的关联工作流和辅助 Skill 固化为任务专用 Agent，并部署到现有 Hermes Profile 或 DeepSeek Harness Preset；通过预览、计划摘要确认、事务写入和分层验证控制部署。 | 专用知识助手、业务支持 Agent、工作流组合部署 |
 | `ssh-operations` | 连接 Windows、macOS 或 Linux 远程设备，执行命令、传输文件和建立端口转发。 | 远程运维、环境检查、日志收集 |
 | `test-reporting` | 把已有测试材料整理为结构统一、可追溯的 Markdown 测试报告。 | 自动化测试、持续集成、质量汇报 |
 
@@ -87,6 +88,7 @@ agent-role 的 README、工作流说明和相关网页
 - “点击当前主显示器桌面上的指定图标；原生 Computer Use 不可用时使用 Cua Driver 探索，并把确认后的 Windows 操作路径固化为 Airtest 回放。”
 - “连接已授权的 Android 真机，打开外卖应用搜索指定关键词；优先复用应用内公共步骤，并用实时控件树定位当前结果。”
 - “把这个目录通过局域网临时分享；如果未安装 Dufs，就使用 `http.server` 快速提供只读下载。”
+- “把知识解答工作流部署为一个 Hermes 专用 Profile；先生成部署预览，确认后再应用并验证。”
 
 用户通常不需要直接运行 `workflows/*/scripts/` 中的脚本；这些脚本是工作流提供给 Agent 的确定性执行接口。
 
