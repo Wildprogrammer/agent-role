@@ -36,6 +36,7 @@ testpaths = [
   "workflows/test-reporting/tests",
   "workflows/mysql-operations/tests",
   "workflows/git-operations/tests",
+  "workflows/specialized-agent-deployment/tests",
   "workflows/ssh-operations/tests",
   "workflows/desktop-client-automation/tests",
   "workflows/mobile-device-automation/tests",
