@@ -50,6 +50,8 @@ metadata:
 
 组件在编译期展开为现有 agent-device 步骤，bundle 不保留运行时 include 或 catalog 绝对路径。每个组件必须有主要动作和强制 postcondition；通常还要有 precondition。状态归一化组件可省略 precondition，但必须有 already-complete 且 effect 不高于 idempotent。already-complete 命中时不执行动作；前置状态不满足时最多执行一次恢复，随后重新验证，不能循环恢复或自动重放有外部影响的动作。
 
+精确版本、参数映射、组件顺序、来源记录和状态转换由平台无关的共享组合核心统一定义；手机仍使用本工作流的 catalog 路径、CLI、selector、`.ad` 脚本和 Android 图片，不与桌面组件共用平台资产。
+
 步骤副作用为 `none|read|idempotent|create|submit|send|delete`。卸载应用、清除应用数据、删除用户文件或业务数据、恢复出厂设置、删除账号/配置/凭据及上游声明的其它不可逆动作必须标为破坏性，不能伪装成普通 selector 或图片点击。
 
 ## 输出与命名规则

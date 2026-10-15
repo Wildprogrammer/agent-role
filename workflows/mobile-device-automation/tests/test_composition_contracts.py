@@ -17,6 +17,25 @@ from agent_workflow_hub.mobile_device_automation.composition_contracts import (
 from agent_workflow_hub.mobile_device_automation.contracts import ContractError
 
 
+def test_mobile_public_composition_types_are_shared_compatibility_aliases() -> None:
+    from agent_workflow_hub.automation_composition.models import (
+        ComponentDefinition,
+        ComponentUse,
+        ScenarioDefinition,
+    )
+    from agent_workflow_hub.mobile_device_automation.composition_models import (
+        AppComponentSpec,
+        AppScenarioSpec,
+        ComponentUseSpec,
+        CompositionRequest,
+    )
+
+    assert AppComponentSpec is ComponentDefinition
+    assert AppScenarioSpec is ScenarioDefinition
+    assert ComponentUseSpec is ComponentUse
+    assert CompositionRequest is not None
+
+
 @dataclass
 class CatalogFixture:
     root: Path

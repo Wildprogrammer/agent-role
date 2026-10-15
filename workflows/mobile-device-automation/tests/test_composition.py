@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 from dataclasses import dataclass
@@ -165,6 +166,27 @@ def test_composes_linear_steps_and_selects_text_mode(
         'fill "id=search" "${query_pinyin}"\n'
     )
     assert automation.steps[1].component.implementation == "pinyin-fallback"
+    assert automation.aggregate_effect == "idempotent"
+
+
+def test_existing_fixture_keeps_component_provenance_and_canonical_ids(
+    composition_fixture: CompositionFixture,
+) -> None:
+    request = composition_fixture.load_request()
+    automation = compose_automation_request(
+        request,
+        staging_root=composition_fixture.stage,
+    )
+    descriptor = composition_fixture.component_path("ensure-home").read_bytes()
+
+    assert [step.id for step in automation.steps] == [
+        "c001-ensure-home",
+        "c002-input-query",
+    ]
+    assert automation.steps[0].component is not None
+    assert automation.steps[0].component.descriptor_sha256 == hashlib.sha256(
+        descriptor
+    ).hexdigest()
     assert automation.aggregate_effect == "idempotent"
 
 

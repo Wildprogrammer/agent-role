@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -9,9 +10,24 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
+try:
+    from agent_workflow_hub.automation_composition.lifecycle import (
+        LifecyclePhase,
+        initial_state,
+        transition,
+    )
+except ImportError:  # pragma: no cover - used by a copied standalone bundle
+    from _automation_lifecycle import LifecyclePhase, initial_state, transition
+
 
 class RuntimeFailure(RuntimeError):
     pass
+
+
+class ComponentRuntimeFailure(RuntimeFailure):
+    def __init__(self, message: str, component: dict[str, Any]) -> None:
+        super().__init__(message)
+        self.components = [component]
 
 
 DESKTOP_INPUT_ACTIONS = {
@@ -65,7 +81,11 @@ def _read_json(path: Path, label: str) -> dict[str, Any]:
     return value
 
 
-def _parameters(manifest: dict[str, Any], bundle: Path) -> dict[str, str]:
+def _parameters(
+    manifest: dict[str, Any],
+    bundle: Path,
+    parameters_path: Path | None = None,
+) -> dict[str, str]:
     values: dict[str, str] = {}
     for item in manifest.get("parameters", []):
         if item.get("sensitive"):
@@ -73,7 +93,11 @@ def _parameters(manifest: dict[str, Any], bundle: Path) -> dict[str, str]:
         default = item.get("default")
         if isinstance(default, str):
             values[item["name"]] = default
-    source = os.environ.get("DESKTOP_AUTOMATION_PARAMETERS")
+    source = (
+        str(parameters_path)
+        if parameters_path is not None
+        else os.environ.get("DESKTOP_AUTOMATION_PARAMETERS")
+    )
     if source:
         path = Path(source)
         if not path.is_absolute() or not path.is_file():
@@ -90,6 +114,94 @@ def _parameters(manifest: dict[str, Any], bundle: Path) -> dict[str, str]:
     if missing:
         raise RuntimeFailure(f"missing parameters: {', '.join(missing)}")
     return values
+
+
+def _canonical_plan(manifest: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in manifest.items()
+        if key
+        not in {
+            "generated_at",
+            "plan_sha256",
+            "source_request",
+            "status",
+        }
+    }
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(65536), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _validate_bundle_integrity(
+    bundle: Path,
+    manifest: dict[str, Any],
+    confirmed_plan_sha256: str | None,
+) -> None:
+    if "component_provenance" not in manifest:
+        return
+    expected_plan = manifest.get("plan_sha256")
+    if not isinstance(expected_plan, str) or len(expected_plan) != 64:
+        raise RuntimeFailure("component_integrity_mismatch: plan digest is missing")
+    actual_plan = hashlib.sha256(
+        json.dumps(
+            _canonical_plan(manifest),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    if actual_plan != expected_plan:
+        raise RuntimeFailure("component_integrity_mismatch: plan digest changed")
+
+    root = bundle.resolve()
+    assets = manifest.get("assets")
+    if not isinstance(assets, list):
+        raise RuntimeFailure("component_integrity_mismatch: asset inventory is missing")
+    for item in assets:
+        if not isinstance(item, dict):
+            raise RuntimeFailure("component_integrity_mismatch: invalid asset record")
+        raw_path = item.get("path")
+        if not isinstance(raw_path, str):
+            raise RuntimeFailure("component_integrity_mismatch: invalid asset path")
+        relative = Path(raw_path)
+        if relative.is_absolute() or ".." in relative.parts:
+            raise RuntimeFailure("component_integrity_mismatch: unsafe asset path")
+        candidate = root / relative
+        current = candidate
+        while current != root:
+            if current.is_symlink():
+                raise RuntimeFailure("component_integrity_mismatch: symlink asset path")
+            current = current.parent
+        try:
+            resolved = candidate.resolve(strict=True)
+            resolved.relative_to(root)
+        except (OSError, ValueError) as exc:
+            raise RuntimeFailure(
+                "component_integrity_mismatch: asset is missing or outside bundle"
+            ) from exc
+        if not resolved.is_file():
+            raise RuntimeFailure("component_integrity_mismatch: asset is not a file")
+        if resolved.stat().st_size != item.get("size") or _sha256(resolved) != item.get(
+            "sha256"
+        ):
+            raise RuntimeFailure("component_integrity_mismatch: asset content changed")
+
+    if confirmed_plan_sha256 is not None and confirmed_plan_sha256 != expected_plan:
+        raise RuntimeFailure("confirmed_plan_sha256_mismatch")
+    if manifest.get("aggregate_effect") in {
+        "create",
+        "submit",
+        "send",
+        "delete",
+        "unknown",
+    } and confirmed_plan_sha256 != expected_plan:
+        raise RuntimeFailure("confirmed_plan_sha256_required")
 
 
 def _resolve_text(value: str, parameters: dict[str, str]) -> str:
@@ -556,21 +668,220 @@ def _run_step(
         raise RuntimeFailure(f"unsupported runtime action: {action}")
 
 
+def _run_step_with_retries(
+    step: dict[str, Any],
+    bundle: Path,
+    parameters: dict[str, str],
+    indexes: dict[str, int],
+    deps: dict[str, Any],
+) -> None:
+    attempts = int(step.get("retries", 0)) + 1
+    for attempt in range(attempts):
+        try:
+            _run_step(step, bundle, parameters, indexes, deps)
+            return
+        except deps["TargetNotFoundError"]:
+            if attempt + 1 >= attempts:
+                if step.get("optional"):
+                    return
+                raise
+
+
+def _probe_component_assertion(
+    assertion: dict[str, Any],
+    bundle: Path,
+    indexes: dict[str, int],
+    deps: dict[str, Any],
+) -> bool:
+    _activate(deps, indexes, assertion["app"])
+    target = _template(deps, bundle, assertion)
+    is_desktop = assertion["app"] in deps.get("desktop_aliases", set())
+
+    def visible() -> bool:
+        match = (
+            _desktop_match_once(deps, target)
+            if is_desktop
+            else deps["exists"](target)
+        )
+        return bool(match)
+
+    if not visible():
+        return False
+    stable_seconds = float(assertion.get("stable_seconds", 0))
+    if stable_seconds > 0:
+        time.sleep(min(stable_seconds, float(assertion.get("timeout_seconds", 1))))
+        return visible()
+    return True
+
+
+def _component_result(
+    component: dict[str, Any],
+    *,
+    status: str | None,
+    error: str | None,
+    phase: str,
+) -> dict[str, Any]:
+    return {
+        "occurrence_id": component["occurrence_id"],
+        "component_id": component["id"],
+        "version": component["version"],
+        "status": status,
+        "error": error,
+        "phase": phase,
+    }
+
+
+def _probe_component_phase(
+    component: dict[str, Any],
+    phase: LifecyclePhase,
+    assertion: dict[str, Any],
+    bundle: Path,
+    indexes: dict[str, int],
+    deps: dict[str, Any],
+) -> bool:
+    try:
+        return _probe_component_assertion(assertion, bundle, indexes, deps)
+    except RuntimeFailure as exc:
+        raise ComponentRuntimeFailure(
+            str(exc),
+            _component_result(
+                component,
+                status="failed",
+                error=str(exc),
+                phase=phase.value,
+            ),
+        ) from exc
+
+
+def _run_component_steps(
+    steps: list[dict[str, Any]],
+    bundle: Path,
+    parameters: dict[str, str],
+    indexes: dict[str, int],
+    deps: dict[str, Any],
+) -> dict[str, Any]:
+    component = steps[0]["component"]
+    state = initial_state(
+        has_already_complete=component.get("already_complete") is not None,
+        has_precondition=component.get("precondition") is not None,
+        has_recovery=component.get("recovery") is not None,
+    )
+    last_phase = state.phase
+    while state.phase not in {LifecyclePhase.COMPLETE, LifecyclePhase.FAILED}:
+        last_phase = state.phase
+        if state.phase is LifecyclePhase.CHECK_ALREADY_COMPLETE:
+            assertion = component["already_complete"]
+            try:
+                passed = _probe_component_phase(
+                    component, state.phase, assertion, bundle, indexes, deps
+                )
+            except deps["TargetNotFoundError"]:
+                passed = False
+            state = transition(
+                state, "assertion-passed" if passed else "assertion-failed"
+            )
+        elif state.phase in {
+            LifecyclePhase.CHECK_PRECONDITION,
+            LifecyclePhase.RECHECK_PRECONDITION,
+        }:
+            assertion = component["precondition"]
+            try:
+                passed = _probe_component_phase(
+                    component, state.phase, assertion, bundle, indexes, deps
+                )
+            except deps["TargetNotFoundError"]:
+                passed = False
+            state = transition(
+                state, "assertion-passed" if passed else "assertion-failed"
+            )
+        elif state.phase is LifecyclePhase.RUN_RECOVERY:
+            recovery = component["recovery"]
+            try:
+                for recovery_step in recovery["steps"]:
+                    _run_step_with_retries(
+                        recovery_step, bundle, parameters, indexes, deps
+                    )
+                recovered = _probe_component_assertion(
+                    recovery["postcondition"], bundle, indexes, deps
+                )
+            except (RuntimeFailure, deps["TargetNotFoundError"]):
+                recovered = False
+            state = transition(
+                state, "action-passed" if recovered else "action-failed"
+            )
+        elif state.phase is LifecyclePhase.RUN_ACTION:
+            try:
+                for step in steps:
+                    _run_step_with_retries(
+                        step, bundle, parameters, indexes, deps
+                    )
+            except (RuntimeFailure, deps["TargetNotFoundError"]):
+                state = transition(state, "action-failed")
+            else:
+                state = transition(state, "action-passed")
+        elif state.phase is LifecyclePhase.CHECK_POSTCONDITION:
+            try:
+                passed = _probe_component_phase(
+                    component,
+                    state.phase,
+                    component["postcondition"],
+                    bundle,
+                    indexes,
+                    deps,
+                )
+            except deps["TargetNotFoundError"]:
+                passed = False
+            state = transition(
+                state, "assertion-passed" if passed else "assertion-failed"
+            )
+        else:  # pragma: no cover - guarded by the shared transition table
+            raise RuntimeFailure(f"unsupported component phase: {state.phase.value}")
+
+    result = _component_result(
+        component,
+        status=state.outcome,
+        error=state.error,
+        phase=last_phase.value,
+    )
+    if state.phase is LifecyclePhase.FAILED:
+        raise ComponentRuntimeFailure(str(state.error), result)
+    return result
+
+
 def _run_steps(
     manifest: dict[str, Any], bundle: Path, parameters: dict[str, str],
     indexes: dict[str, int], deps: dict[str, Any]
-) -> None:
-    for step in manifest["steps"]:
-        attempts = int(step.get("retries", 0)) + 1
-        for attempt in range(attempts):
-            try:
-                _run_step(step, bundle, parameters, indexes, deps)
+) -> list[dict[str, Any]]:
+    results: list[dict[str, Any]] = []
+    steps = manifest["steps"]
+    index = 0
+    while index < len(steps):
+        step = steps[index]
+        component = step.get("component")
+        if component is None:
+            _run_step_with_retries(step, bundle, parameters, indexes, deps)
+            index += 1
+            continue
+        occurrence_id = component["occurrence_id"]
+        group: list[dict[str, Any]] = []
+        while index < len(steps):
+            candidate = steps[index]
+            candidate_component = candidate.get("component")
+            if (
+                candidate_component is None
+                or candidate_component.get("occurrence_id") != occurrence_id
+            ):
                 break
-            except deps["TargetNotFoundError"]:
-                if attempt + 1 >= attempts:
-                    if step.get("optional"):
-                        break
-                    raise
+            group.append(candidate)
+            index += 1
+        try:
+            results.append(
+                _run_component_steps(group, bundle, parameters, indexes, deps)
+            )
+        except ComponentRuntimeFailure as exc:
+            exc.components = [*results, *exc.components]
+            raise
+    return results
 
 
 def _assert_success(
@@ -597,18 +908,31 @@ def _assert_success(
     raise RuntimeFailure("the user-confirmed final assertion did not remain visible")
 
 
-def run_bundle(bundle: Path) -> int:
+def run_bundle(
+    bundle: Path,
+    *,
+    parameters_path: Path | None = None,
+    confirmed_plan_sha256: str | None = None,
+) -> int:
     bundle = bundle.resolve()
     manifest = _read_json(bundle / "manifest.json", "manifest")
     deps: dict[str, Any] = {}
+    components: list[dict[str, Any]] = []
     result_path = bundle / "run-result.json"
     started = time.time()
     try:
+        _validate_bundle_integrity(bundle, manifest, confirmed_plan_sha256)
         deps = _dependencies()
-        parameters = _parameters(manifest, bundle)
+        parameters = (
+            _parameters(manifest, bundle)
+            if parameters_path is None
+            else _parameters(manifest, bundle, parameters_path)
+        )
         indexes = _prepare_apps(manifest, deps)
         with _preserve_text_clipboard(deps["win32clipboard"]):
-            _run_steps(manifest, bundle, parameters, indexes, deps)
+            components = (
+                _run_steps(manifest, bundle, parameters, indexes, deps) or []
+            )
             _assert_success(manifest["success_assertion"], bundle, indexes, deps)
         evidence = bundle / "replay-success.png"
         deps["snapshot"](filename=str(evidence))
@@ -618,9 +942,12 @@ def run_bundle(bundle: Path) -> int:
             "finished_at": time.time(),
             "aggregate_effect": manifest["aggregate_effect"],
             "evidence": str(evidence),
+            "components": components,
         }
         exit_code = 0
     except Exception as exc:
+        if isinstance(exc, ComponentRuntimeFailure):
+            components = exc.components
         evidence = bundle / "replay-failure.png"
         try:
             if not deps:
@@ -634,6 +961,7 @@ def run_bundle(bundle: Path) -> int:
             "finished_at": time.time(),
             "error": str(exc),
             "evidence": str(evidence) if evidence else None,
+            "components": components,
         }
         exit_code = 1
     manifest["status"] = result["status"]

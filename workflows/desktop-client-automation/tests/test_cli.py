@@ -11,6 +11,112 @@ from agent_workflow_hub.desktop_client_automation import cli
 from agent_workflow_hub.desktop_client_automation.airtest_runtime import RuntimeFailure
 
 
+def test_compose_outputs_bundle_and_plan_sha(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    request_path = (tmp_path / "request.json").resolve()
+    request_path.write_text("{}", encoding="utf-8")
+    bundle = (tmp_path / "bundle.air").resolve()
+    monkeypatch.setattr(cli.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(cli, "load_composition_request", lambda path: object())
+    monkeypatch.setattr(cli, "compose_bundle", lambda request, output: bundle)
+    monkeypatch.setattr(
+        cli,
+        "preview_bundle",
+        lambda value: {
+            "aggregate_effect": "read",
+            "plan_sha256": "a" * 64,
+        },
+    )
+
+    assert (
+        cli.main(
+            [
+                "compose",
+                "--request",
+                str(request_path),
+                "--output-root",
+                str(tmp_path.resolve()),
+            ]
+        )
+        == 0
+    )
+    result = json.loads(capsys.readouterr().out)
+    assert result["status"] == "generated-unverified"
+    assert result["bundle"] == str(bundle)
+    assert result["plan_sha256"] == "a" * 64
+
+
+def test_replay_forwards_parameter_file_and_confirmed_digest(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    recorded: dict[str, object] = {}
+    bundle = (tmp_path / "bundle.air").resolve()
+    bundle.mkdir()
+    (bundle / "manifest.json").write_text("{}", encoding="utf-8")
+    parameters = (tmp_path / "parameters.json").resolve()
+    parameters.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(cli.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(
+        cli,
+        "run_bundle",
+        lambda selected, **kwargs: recorded.update(
+            {"bundle": selected, **kwargs}
+        )
+        or 0,
+    )
+    digest = "b" * 64
+
+    assert (
+        cli.main(
+            [
+                "replay",
+                "--bundle",
+                str(bundle),
+                "--parameters",
+                str(parameters),
+                "--confirmed-plan-sha256",
+                digest,
+            ]
+        )
+        == 0
+    )
+    assert recorded == {
+        "bundle": bundle,
+        "parameters_path": parameters,
+        "confirmed_plan_sha256": digest,
+    }
+
+
+def test_macos_compose_reports_backend_gap_before_reading_request(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(cli.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(
+        cli,
+        "load_composition_request",
+        lambda path: pytest.fail("macOS backend gap must be reported first"),
+    )
+
+    assert (
+        cli.main(
+            [
+                "compose",
+                "--request",
+                "C:/request.json",
+                "--output-root",
+                "C:/out",
+            ]
+        )
+        == 2
+    )
+    assert json.loads(capsys.readouterr().out)["status"] == "needs-replay-backend"
+
+
 def test_doctor_parser_accepts_cua_and_preserves_computer_use_alias() -> None:
     parser = cli.build_parser()
     args = parser.parse_args(

@@ -10,6 +10,13 @@ from typing import Any
 
 import yaml
 
+from agent_workflow_hub.automation_composition.lifecycle import (
+    LifecyclePhase,
+    LifecycleState,
+    initial_state,
+    transition,
+)
+
 from .agent_device_runtime import (
     RuntimeFailure,
     bind_android_device,
@@ -468,6 +475,144 @@ def _run_assertion(
         raise _PostconditionFailure(str(exc)) from exc
 
 
+def _prepare_component_action(
+    component: dict[str, object],
+    *,
+    bundle: Path,
+    serial: str,
+    session: str,
+    state_dir: Path,
+    viewport: ViewportSpec,
+    agent_runtime: object,
+    airtest_runtime: object,
+    parameters: dict[str, str],
+) -> tuple[
+    LifecycleState,
+    Path,
+    dict[str, object] | None,
+    dict[str, object] | None,
+    str,
+]:
+    recovery_value = component.get("recovery")
+    state = initial_state(
+        has_already_complete=isinstance(component.get("already_complete"), dict),
+        has_precondition=isinstance(component.get("precondition"), dict),
+        has_recovery=isinstance(recovery_value, dict),
+    )
+    already_evidence: dict[str, object] | None = None
+    recovery_result: dict[str, object] | None = None
+    lifecycle_branch = "precondition-satisfied"
+
+    if state.phase is LifecyclePhase.CHECK_ALREADY_COMPLETE:
+        already_complete = component["already_complete"]
+        visible, already_evidence = _probe_assertion(
+            lambda: _execute_assertion(
+                already_complete,  # type: ignore[arg-type]
+                bundle=bundle,
+                serial=serial,
+                session=session,
+                state_dir=state_dir,
+                viewport=viewport,
+                agent_runtime=agent_runtime,
+                airtest_runtime=airtest_runtime,
+                parameters=parameters,
+            )
+        )
+        state = transition(
+            state,
+            "assertion-passed" if visible else "assertion-failed",
+        )
+        if state.phase is LifecyclePhase.COMPLETE:
+            return (
+                state,
+                state_dir,
+                already_evidence,
+                recovery_result,
+                "already-complete",
+            )
+
+    if state.phase is LifecyclePhase.CHECK_PRECONDITION:
+        precondition = component["precondition"]
+        visible, _ = _probe_assertion(
+            lambda: _execute_assertion(
+                precondition,  # type: ignore[arg-type]
+                bundle=bundle,
+                serial=serial,
+                session=session,
+                state_dir=state_dir,
+                viewport=viewport,
+                agent_runtime=agent_runtime,
+                airtest_runtime=airtest_runtime,
+                parameters=parameters,
+            )
+        )
+        state = transition(
+            state,
+            "assertion-passed" if visible else "assertion-failed",
+        )
+
+    if state.phase is LifecyclePhase.RUN_RECOVERY:
+        lifecycle_branch = "recovered"
+        recovery = recovery_value
+        if not isinstance(recovery, dict):
+            raise RuntimeFailure("component_recovery_failed")
+        recovery_script = _resolve_asset(bundle, recovery["script"])
+        try:
+            recovery_result = agent_runtime.replay_ad(
+                recovery_script,
+                serial=serial,
+                session=session,
+                parameters=parameters,
+                state_dir=state_dir,
+            )
+            returned_state_dir = recovery_result.get("_state_dir")
+            if isinstance(returned_state_dir, str):
+                state_dir = Path(returned_state_dir)
+            if recovery_result.get("status") in {"diverged", "failed"}:
+                raise RuntimeFailure("component_recovery_failed")
+            _execute_assertion(
+                recovery.get("postcondition"),
+                bundle=bundle,
+                serial=serial,
+                session=session,
+                state_dir=state_dir,
+                viewport=viewport,
+                agent_runtime=agent_runtime,
+                airtest_runtime=airtest_runtime,
+                parameters=parameters,
+            )
+        except Exception as exc:
+            failed = transition(state, "action-failed")
+            raise RuntimeFailure(failed.error or "component_recovery_failed") from exc
+        state = transition(state, "action-passed")
+
+    if state.phase is LifecyclePhase.RECHECK_PRECONDITION:
+        precondition = component.get("precondition")
+        visible, _ = _probe_assertion(
+            lambda: _execute_assertion(
+                precondition,  # type: ignore[arg-type]
+                bundle=bundle,
+                serial=serial,
+                session=session,
+                state_dir=state_dir,
+                viewport=viewport,
+                agent_runtime=agent_runtime,
+                airtest_runtime=airtest_runtime,
+                parameters=parameters,
+            )
+        )
+        state = transition(
+            state,
+            "assertion-passed" if visible else "assertion-failed",
+        )
+
+    if state.phase is LifecyclePhase.FAILED:
+        raise RuntimeFailure(state.error or "component_precondition_failed")
+    if state.phase is not LifecyclePhase.RUN_ACTION:
+        raise RuntimeFailure("runtime_failed: invalid component lifecycle state")
+    return state, state_dir, already_evidence, recovery_result, lifecycle_branch
+
+
 def run_bundle(
     bundle: Path,
     *,
@@ -535,26 +680,24 @@ def run_bundle(
                     if session_state_dir is None:
                         session_state_dir = evidence / "ad-state"
                         session_state_dir.mkdir(exist_ok=False)
-
-                    already_complete = component.get("already_complete")
-                    already_visible = False
-                    already_evidence: dict[str, object] | None = None
-                    if isinstance(already_complete, dict):
-                        already_visible, already_evidence = _probe_assertion(
-                            lambda: _execute_assertion(
-                                already_complete,
-                                bundle=root,
-                                serial=serial,
-                                session=session,
-                                state_dir=session_state_dir,
-                                viewport=expected_viewport,
-                                agent_runtime=agent_runtime,
-                                airtest_runtime=airtest_runtime,
-                                parameters=parameters,
-                            )
-                        )
-                    if already_visible:
-                        lifecycle_branch = "already-complete"
+                    (
+                        component_state,
+                        session_state_dir,
+                        already_evidence,
+                        recovery_result,
+                        lifecycle_branch,
+                    ) = _prepare_component_action(
+                        component,
+                        bundle=root,
+                        serial=serial,
+                        session=session,
+                        state_dir=session_state_dir,
+                        viewport=expected_viewport,
+                        agent_runtime=agent_runtime,
+                        airtest_runtime=airtest_runtime,
+                        parameters=parameters,
+                    )
+                    if component_state.phase is LifecyclePhase.COMPLETE:
                         summaries.append(
                             {
                                 "id": step_id,
@@ -584,74 +727,6 @@ def run_bundle(
                             },
                         )
                         continue
-
-                    precondition = component.get("precondition")
-                    precondition_visible = True
-                    if isinstance(precondition, dict):
-                        precondition_visible, _ = _probe_assertion(
-                            lambda: _execute_assertion(
-                                precondition,
-                                bundle=root,
-                                serial=serial,
-                                session=session,
-                                state_dir=session_state_dir,
-                                viewport=expected_viewport,
-                                agent_runtime=agent_runtime,
-                                airtest_runtime=airtest_runtime,
-                                parameters=parameters,
-                            )
-                        )
-                    if not precondition_visible:
-                        recovery = component.get("recovery")
-                        if isinstance(recovery, dict):
-                            lifecycle_branch = "recovered"
-                            recovery_script = _resolve_asset(root, recovery["script"])
-                            recovery_result = agent_runtime.replay_ad(
-                                recovery_script,
-                                serial=serial,
-                                session=session,
-                                parameters=parameters,
-                                state_dir=session_state_dir,
-                            )
-                            returned_state_dir = recovery_result.get("_state_dir")
-                            if isinstance(returned_state_dir, str):
-                                session_state_dir = Path(returned_state_dir)
-                            if recovery_result.get("status") in {"diverged", "failed"}:
-                                raise RuntimeFailure("component_recovery_failed")
-                            try:
-                                _execute_assertion(
-                                    recovery.get("postcondition"),
-                                    bundle=root,
-                                    serial=serial,
-                                    session=session,
-                                    state_dir=session_state_dir,
-                                    viewport=expected_viewport,
-                                    agent_runtime=agent_runtime,
-                                    airtest_runtime=airtest_runtime,
-                                    parameters=parameters,
-                                )
-                            except Exception as exc:
-                                raise RuntimeFailure(
-                                    "component_recovery_failed"
-                                ) from exc
-                            if isinstance(precondition, dict):
-                                precondition_visible, _ = _probe_assertion(
-                                    lambda: _execute_assertion(
-                                        precondition,
-                                        bundle=root,
-                                        serial=serial,
-                                        session=session,
-                                        state_dir=session_state_dir,
-                                        viewport=expected_viewport,
-                                        agent_runtime=agent_runtime,
-                                        airtest_runtime=airtest_runtime,
-                                        parameters=parameters,
-                                    )
-                                )
-                        if not precondition_visible:
-                            raise RuntimeFailure("component_precondition_failed")
-                    if lifecycle_branch is None:
-                        lifecycle_branch = "precondition-satisfied"
 
                 if runner_name == "agent-device":
                     session_used = True
@@ -695,6 +770,8 @@ def run_bundle(
                         threshold=step["threshold"],
                         timeout_seconds=step["timeout_seconds"],
                     )
+                if isinstance(component, dict):
+                    component_state = transition(component_state, "action-passed")
                 try:
                     _run_assertion(
                         step.get("assertion"),
@@ -709,8 +786,19 @@ def run_bundle(
                     )
                 except _PostconditionFailure as exc:
                     if isinstance(component, dict):
-                        raise RuntimeFailure("component_postcondition_failed") from exc
+                        component_state = transition(
+                            component_state,
+                            "assertion-failed",
+                        )
+                        raise RuntimeFailure(
+                            component_state.error or "component_postcondition_failed"
+                        ) from exc
                     raise
+                if isinstance(component, dict):
+                    component_state = transition(
+                        component_state,
+                        "assertion-passed",
+                    )
                 status = "component-verified" if isinstance(component, dict) else "passed"
                 summary = {"id": step_id, "runner": runner_name, "status": status}
                 summaries.append(summary)

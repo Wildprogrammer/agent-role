@@ -9,6 +9,16 @@ from typing import Any
 
 import yaml
 
+from agent_workflow_hub.automation_composition.catalog import (
+    component_descriptor_path as _shared_component_descriptor_path,
+    resolve_inside as _shared_resolve_inside,
+)
+from agent_workflow_hub.automation_composition.contracts import (
+    CompositionContractError,
+    parse_component_reference,
+    validate_parameter_mapping,
+)
+
 from .composition_models import (
     AppComponentSpec,
     AppScenarioSpec,
@@ -65,7 +75,6 @@ REQUEST_FIELDS = {
     "effective_path_confirmed",
 }
 IMPLEMENTATION_KEYS = {"default", "direct-ime", "pinyin-fallback"}
-EXACT_USE = re.compile(r"^([a-z][a-z0-9_-]{0,63})@([1-9][0-9]*)$")
 VERSION_DIRECTORY = re.compile(r"^v([0-9]{3,})$")
 
 
@@ -147,9 +156,10 @@ def _positive_number(value: Any, label: str) -> float:
 
 def _resolved_inside(path: Path, root: Path, label: str) -> Path:
     try:
-        resolved = path.resolve(strict=True)
-        resolved.relative_to(root.resolve(strict=True))
-    except (OSError, ValueError) as exc:
+        resolved = _shared_resolve_inside(path, root, label)
+        if not resolved.exists():
+            raise OSError(f"{label} does not exist")
+    except (CompositionContractError, OSError) as exc:
         raise _invalid(f"{label} must resolve inside {root}", cause=exc) from exc
     return resolved
 
@@ -216,13 +226,10 @@ def _component_asset(
 def component_descriptor_path(
     catalog_root: Path, component_id: str, version: int
 ) -> Path:
-    return (
-        catalog_root
-        / "components"
-        / component_id
-        / f"v{version:03d}"
-        / "component.yaml"
-    )
+    try:
+        return _shared_component_descriptor_path(catalog_root, component_id, version)
+    except CompositionContractError as exc:
+        raise _invalid(str(exc), cause=exc) from exc
 
 
 def load_component(path: Path, *, catalog_root: Path) -> AppComponentSpec:
@@ -368,11 +375,15 @@ def load_scenario(path: Path, *, catalog_root: Path) -> AppScenarioSpec:
     for index, raw_use in enumerate(raw_components):
         use = _mapping(raw_use, f"scenario.components[{index}]")
         _closed(use, COMPONENT_USE_FIELDS, f"scenario.components[{index}]")
-        match = EXACT_USE.fullmatch(_text(use.get("use"), "component use"))
-        if match is None:
-            raise _invalid("component use must be an exact <id>@<version> reference")
-        component_id, version_text = match.groups()
-        version = int(version_text)
+        try:
+            component_id, version = parse_component_reference(
+                _text(use.get("use"), "component use")
+            )
+        except CompositionContractError as exc:
+            raise _invalid(
+                "component use must be an exact <id>@<version> reference",
+                cause=exc,
+            ) from exc
         component = load_component(
             component_descriptor_path(catalog, component_id, version),
             catalog_root=catalog,
@@ -386,11 +397,15 @@ def load_scenario(path: Path, *, catalog_root: Path) -> AppScenarioSpec:
         for local_name, scenario_name in raw_map.items():
             local = _identifier(local_name, "component parameter mapping key")
             target = _identifier(scenario_name, "component parameter mapping value")
-            if target not in parameter_names:
-                raise ContractError(
-                    "component_parameter_invalid: mapping references an unknown scenario parameter"
-                )
             parameter_map[local] = target
+        try:
+            parameter_map = validate_parameter_mapping(
+                component_parameters=component.parameters,
+                mapping=parameter_map,
+                scenario_parameters=parameter_names,
+            )
+        except CompositionContractError as exc:
+            raise ContractError(str(exc)) from exc
         components.append(
             ComponentUseSpec(
                 component_id=component_id,

@@ -1,0 +1,32 @@
+schema_version: '1.0'
+platform: windows
+app_id: example-desktop-app
+id: search-items
+version: 1
+effect: read
+timeout_seconds: 20
+parameters:
+  - query
+precondition:
+  kind: image-visible
+  template: search-ready.png
+  threshold: 0.85
+  timeout_seconds: 5
+  stable_seconds: 0.5
+implementations:
+  windows-airtest:
+    steps:
+      - action: click-image
+        template: search-button.png
+      - action: hotkey
+        keys: [CTRL, A]
+      - action: type-text
+        text: ${query}
+      - action: press-key
+        key: ENTER
+postcondition:
+  kind: image-visible
+  template: results-ready.png
+  threshold: 0.85
+  timeout_seconds: 10
+  stable_seconds: 0.5

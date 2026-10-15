@@ -2,13 +2,274 @@ from __future__ import annotations
 
 import json
 from contextlib import nullcontext
+from dataclasses import dataclass
+from importlib import import_module
 from pathlib import Path
+from unittest.mock import Mock
 
 import numpy as np
 import pytest
 
 from agent_workflow_hub.desktop_client_automation import airtest_runtime
 from agent_workflow_hub.desktop_client_automation.airtest_runtime import RuntimeFailure, _resolve_text
+
+
+@dataclass(frozen=True)
+class RuntimeBundleFixture:
+    path: Path
+    plan_sha: str
+
+
+_composition_fixtures = import_module(
+    "workflows.desktop-client-automation.tests.composition_fixtures"
+)
+desktop_catalog = _composition_fixtures.desktop_catalog
+
+
+@pytest.fixture
+def runtime_bundle(desktop_catalog: object, tmp_path: Path) -> RuntimeBundleFixture:
+    import yaml
+
+    from agent_workflow_hub.desktop_client_automation.composition import compose_bundle
+    from agent_workflow_hub.desktop_client_automation.composition_contracts import (
+        load_composition_request,
+    )
+
+    component_path = desktop_catalog.component_path
+    component = yaml.safe_load(component_path.read_text(encoding="utf-8"))
+    component["already_complete"] = {
+        "kind": "image-visible",
+        "template": "results-state.png",
+        "threshold": 0.85,
+        "timeout_seconds": 1,
+        "stable_seconds": 0.01,
+    }
+    component["recovery"] = {
+        "steps": [{"action": "click-image", "template": "search-button.png"}],
+        "postcondition": {
+            "kind": "image-visible",
+            "template": "favorites-state.png",
+            "threshold": 0.85,
+            "timeout_seconds": 1,
+            "stable_seconds": 0.01,
+        },
+    }
+    component_path.write_text(
+        yaml.safe_dump(component, sort_keys=False), encoding="utf-8"
+    )
+    scenario = yaml.safe_load(desktop_catalog.scenario_path.read_text(encoding="utf-8"))
+    scenario["parameters"][0]["default"] = "sample"
+    desktop_catalog.scenario_path.write_text(
+        yaml.safe_dump(scenario, sort_keys=False), encoding="utf-8"
+    )
+    bundle = compose_bundle(
+        load_composition_request(desktop_catalog.request_path),
+        (tmp_path / "runtime-output").resolve(),
+    )
+    manifest = json.loads((bundle / "manifest.json").read_text(encoding="utf-8"))
+    return RuntimeBundleFixture(bundle, manifest["plan_sha256"])
+
+
+def _runtime_dependencies(exists: object) -> dict[str, object]:
+    class TargetNotFoundError(Exception):
+        pass
+
+    touch = Mock()
+
+    def snapshot(*, filename: str) -> None:
+        Path(filename).write_bytes(b"png")
+
+    return {
+        "TargetNotFoundError": TargetNotFoundError,
+        "Template": lambda path, threshold: (path, threshold),
+        "exists": exists,
+        "wait": lambda target, timeout: (10, 10),
+        "touch": touch,
+        "text": Mock(),
+        "keyboard": Mock(send_keys=Mock()),
+        "mouse": Mock(),
+        "swipe": Mock(),
+        "set_current": Mock(),
+        "windows": {},
+        "desktop_aliases": set(),
+        "win32clipboard": object(),
+        "snapshot": snapshot,
+    }
+
+
+def _patch_composed_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+    dependencies: dict[str, object],
+) -> None:
+    monkeypatch.setattr(airtest_runtime, "_dependencies", lambda: dependencies)
+    monkeypatch.setattr(
+        airtest_runtime,
+        "_prepare_apps",
+        lambda manifest, deps: {"example-app": 0},
+    )
+    monkeypatch.setattr(
+        airtest_runtime,
+        "_preserve_text_clipboard",
+        lambda clipboard: nullcontext(),
+    )
+    monkeypatch.setattr(
+        airtest_runtime,
+        "_assert_success",
+        lambda assertion, bundle, indexes, deps: None,
+    )
+
+
+def test_already_complete_uses_fresh_match_and_skips_component_action(
+    runtime_bundle: RuntimeBundleFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    exists = Mock(return_value=(10, 10))
+    dependencies = _runtime_dependencies(exists)
+    _patch_composed_runtime(monkeypatch, dependencies)
+
+    code = airtest_runtime.run_bundle(
+        runtime_bundle.path,
+        confirmed_plan_sha256=runtime_bundle.plan_sha,
+    )
+
+    assert code == 0
+    dependencies["touch"].assert_not_called()
+    result = json.loads(
+        (runtime_bundle.path / "run-result.json").read_text(encoding="utf-8")
+    )
+    assert result["components"][0]["status"] == "already-complete"
+
+
+def test_failed_precondition_runs_recovery_once_then_stops(
+    runtime_bundle: RuntimeBundleFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    exists = Mock(side_effect=[False, False, True, True, False])
+    dependencies = _runtime_dependencies(exists)
+    _patch_composed_runtime(monkeypatch, dependencies)
+
+    code = airtest_runtime.run_bundle(
+        runtime_bundle.path,
+        confirmed_plan_sha256=runtime_bundle.plan_sha,
+    )
+
+    assert code == 1
+    assert dependencies["touch"].call_count == 1
+    result = (runtime_bundle.path / "run-result.json").read_text(encoding="utf-8")
+    assert "component_precondition_failed" in result
+    parsed = json.loads(result)
+    assert parsed["components"][0]["status"] == "failed"
+    assert parsed["components"][0]["error"] == "component_precondition_failed"
+
+
+def test_ambiguous_component_image_never_calls_coordinate_or_cua(
+    runtime_bundle: RuntimeBundleFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    exists = Mock(side_effect=RuntimeFailure("ambiguous-match: image_not_unique"))
+    dependencies = _runtime_dependencies(exists)
+    _patch_composed_runtime(monkeypatch, dependencies)
+
+    assert (
+        airtest_runtime.run_bundle(
+            runtime_bundle.path,
+            confirmed_plan_sha256=runtime_bundle.plan_sha,
+        )
+        == 1
+    )
+    dependencies["touch"].assert_not_called()
+    result = json.loads(
+        (runtime_bundle.path / "run-result.json").read_text(encoding="utf-8")
+    )
+    assert result["components"][0]["occurrence_id"] == "c001-search-model"
+    assert result["components"][0]["phase"] == "check-already-complete"
+    assert "ambiguous-match" in result["components"][0]["error"]
+
+
+def test_component_asset_drift_fails_before_application_preparation(
+    runtime_bundle: RuntimeBundleFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest = json.loads(
+        (runtime_bundle.path / "manifest.json").read_text(encoding="utf-8")
+    )
+    asset = runtime_bundle.path / manifest["assets"][0]["path"]
+    asset.write_bytes(asset.read_bytes() + b"drift")
+    prepared = Mock()
+    monkeypatch.setattr(airtest_runtime, "_prepare_apps", prepared)
+
+    assert (
+        airtest_runtime.run_bundle(
+            runtime_bundle.path,
+            confirmed_plan_sha256=runtime_bundle.plan_sha,
+        )
+        == 1
+    )
+    prepared.assert_not_called()
+    assert "component_integrity_mismatch" in (
+        runtime_bundle.path / "run-result.json"
+    ).read_text(encoding="utf-8")
+
+
+def test_side_effecting_composed_bundle_requires_exact_plan_confirmation(
+    desktop_catalog: object,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import yaml
+
+    from agent_workflow_hub.desktop_client_automation.composition import compose_bundle
+    from agent_workflow_hub.desktop_client_automation.composition_contracts import (
+        load_composition_request,
+    )
+
+    component = yaml.safe_load(
+        desktop_catalog.component_path.read_text(encoding="utf-8")
+    )
+    component["effect"] = "create"
+    desktop_catalog.component_path.write_text(
+        yaml.safe_dump(component, sort_keys=False), encoding="utf-8"
+    )
+    bundle = compose_bundle(
+        load_composition_request(desktop_catalog.request_path),
+        (tmp_path / "confirmation-output").resolve(),
+    )
+    initialized = Mock()
+    monkeypatch.setattr(airtest_runtime, "_dependencies", initialized)
+
+    assert airtest_runtime.run_bundle(bundle) == 1
+    initialized.assert_not_called()
+    assert "confirmed_plan_sha256_required" in (
+        bundle / "run-result.json"
+    ).read_text(encoding="utf-8")
+
+
+def test_explicit_parameter_file_takes_precedence_over_environment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    environment = (tmp_path / "environment.json").resolve()
+    explicit = (tmp_path / "explicit.json").resolve()
+    environment.write_text('{"term":"environment"}', encoding="utf-8")
+    explicit.write_text('{"term":"explicit"}', encoding="utf-8")
+    monkeypatch.setenv("DESKTOP_AUTOMATION_PARAMETERS", str(environment))
+
+    values = airtest_runtime._parameters(
+        {
+            "parameters": [
+                {
+                    "name": "term",
+                    "kind": "text",
+                    "default": "default",
+                    "sensitive": False,
+                }
+            ]
+        },
+        tmp_path,
+        explicit,
+    )
+
+    assert values == {"term": "explicit"}
 
 
 def test_resolve_text_uses_named_parameters() -> None:

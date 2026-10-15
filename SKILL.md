@@ -74,8 +74,8 @@ The rows below are catalogued workflows. Dynamic validation determines their cur
 | `mysql-operations` | Catalogued workflow. Independently inspect one externally configured MySQL target through fixed metadata/read, structured DML, and guarded migration tools. |
 | `specialized-agent-deployment` | Catalogued workflow. Assemble one existing primary workflow, its explicitly selected related workflows, and user-named auxiliary Skills into a fixed-snapshot task-specific Agent for an existing supported host, with one deployment review and layered verification. |
 | `ssh-operations` | Catalogued workflow. Connect to configured Windows, macOS, or Linux SSH targets to run commands and related steps, manage files through SFTP/SCP, traverse jump hosts, and open explicit port forwarding with TOFU host-key protection and one confirmation only for high-impact operations. |
-| `desktop-client-automation` | Catalogued workflow. Use Cua Driver MCP for cross-host Windows/macOS desktop exploration, preserve Codex native Computer Use as a compatibility path, and optionally compile confirmed Windows paths into Airtest scripts with deterministic replay and visual evidence. |
-| `mobile-device-automation` | Catalogued workflow. Explore Android physical devices and emulators through agent-device, then compile confirmed semantic and conditional Airtest image steps into a verified mixed replay with device-bound evidence. |
+| `desktop-client-automation` | Catalogued workflow. Use Cua Driver MCP for cross-host Windows/macOS desktop exploration, preserve Codex native Computer Use as a compatibility path, and compose exact-version Windows Airtest components through the shared composition semantics while keeping desktop images and application bindings platform-local. |
+| `mobile-device-automation` | Catalogued workflow. Explore Android physical devices and emulators through agent-device, then compose exact-version semantic and conditional Airtest components through the shared composition semantics while keeping Android selectors, scripts, images, and device evidence platform-local. |
 
 ## Prepare / bootstrap
 

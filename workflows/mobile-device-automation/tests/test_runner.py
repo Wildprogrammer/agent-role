@@ -341,6 +341,26 @@ def test_preview_validates_and_summarizes_without_device_input(bundle: Path) -> 
     assert result["destructive_step_ids"] == []
 
 
+def test_legacy_bundle_without_component_metadata_keeps_replay_path(
+    bundle: Path,
+    runtime_fakes,
+) -> None:
+    assert all("component" not in step for step in manifest(bundle)["steps"])
+    assert preview_bundle(bundle)["status"] == "preview-ready"
+    fake_agent, fake_airtest, events = runtime_fakes
+    parameter_file = bundle / "legacy-parameters.yaml"
+    parameter_file.write_text("password: fixture-value\n", encoding="utf-8")
+
+    assert run_bundle(
+        bundle,
+        parameters_path=parameter_file.resolve(),
+        agent_runtime=fake_agent,
+        airtest_runtime=fake_airtest,
+    ) == 0
+    assert events
+    assert all(step["status"] == "passed" for step in read_result(bundle)["steps"])
+
+
 def test_preview_exposes_only_component_identity(component_bundle: Path) -> None:
     result = preview_bundle(component_bundle)
     assert result["steps"][0]["component"] == {

@@ -2,9 +2,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, Mapping
+from typing import Literal
 
-from .models import AssertionSpec, Decision, DeviceSpec, Effect, ParameterSpec
+from agent_workflow_hub.automation_composition.models import (
+    ComponentDefinition as AppComponentSpec,
+    ComponentUse as ComponentUseSpec,
+    ScenarioDefinition as AppScenarioSpec,
+)
+
+from .models import AssertionSpec, Decision, DeviceSpec
 
 
 TextInputMode = Literal["direct-ime", "pinyin-fallback"]
@@ -14,40 +20,6 @@ TextInputMode = Literal["direct-ime", "pinyin-fallback"]
 class ComponentRecoverySpec:
     script: Path
     postcondition: AssertionSpec
-
-
-@dataclass(frozen=True)
-class AppComponentSpec:
-    source: Path
-    descriptor_sha256: str
-    app_id: str
-    id: str
-    version: int
-    effect: Effect
-    timeout_seconds: float
-    parameters: tuple[str, ...]
-    precondition: AssertionSpec | None
-    already_complete: AssertionSpec | None
-    implementations: Mapping[str, Path]
-    recovery: ComponentRecoverySpec | None
-    postcondition: AssertionSpec
-
-
-@dataclass(frozen=True)
-class ComponentUseSpec:
-    component_id: str
-    version: int
-    parameter_map: Mapping[str, str]
-
-
-@dataclass(frozen=True)
-class AppScenarioSpec:
-    source: Path
-    app_id: str
-    id: str
-    description: str
-    parameters: tuple[ParameterSpec, ...]
-    components: tuple[ComponentUseSpec, ...]
 
 
 @dataclass(frozen=True)

@@ -9,7 +9,14 @@ import sys
 from pathlib import Path
 from typing import Sequence
 
-from .airtest_runtime import RuntimeFailure, _uia_windows, run_bundle
+from .airtest_runtime import (
+    RuntimeFailure,
+    _uia_windows,
+    _validate_bundle_integrity,
+    run_bundle,
+)
+from .composition import compose_bundle
+from .composition_contracts import load_composition_request
 from .contracts import ContractError, load_request
 from .cua_runtime import probe_cua_driver
 from .exploration import capture_target, click_image, locate_image
@@ -141,6 +148,77 @@ def _compile(args: argparse.Namespace) -> int:
     return 0
 
 
+def preview_bundle(bundle: Path) -> dict[str, object]:
+    if not bundle.is_absolute() or not bundle.is_dir():
+        raise ContractError("bundle must be an existing absolute directory")
+    manifest = _read_manifest(bundle)
+    if "component_provenance" not in manifest:
+        raise ContractError("bundle does not contain component provenance")
+    plan_sha = manifest.get("plan_sha256")
+    _validate_bundle_integrity(
+        bundle.resolve(),
+        manifest,
+        str(plan_sha) if plan_sha is not None else None,
+    )
+    provenance = manifest["component_provenance"]
+    return {
+        "status": manifest.get("status"),
+        "bundle": str(bundle.resolve()),
+        "aggregate_effect": manifest.get("aggregate_effect"),
+        "plan_sha256": plan_sha,
+        "scenario_id": provenance.get("scenario_id"),
+        "components": provenance.get("components", []),
+        "steps": [
+            {
+                "id": step.get("id"),
+                "action": step.get("action"),
+                "effect": step.get("effect"),
+            }
+            for step in manifest.get("steps", [])
+        ],
+    }
+
+
+def _read_manifest(bundle: Path) -> dict[str, object]:
+    manifest_path = bundle / "manifest.json"
+    try:
+        value = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ContractError(f"invalid bundle manifest: {exc}") from exc
+    if not isinstance(value, dict):
+        raise ContractError("invalid bundle manifest: root must be an object")
+    return value
+
+
+def _compose(args: argparse.Namespace) -> int:
+    platform_name = platform.system()
+    if platform_name != "Windows":
+        status = (
+            "needs-replay-backend"
+            if platform_name == "Darwin"
+            else "unsupported-platform"
+        )
+        _print({"status": status, "platform": platform_name})
+        return 2
+    request = load_composition_request(Path(args.request))
+    bundle = compose_bundle(request, Path(args.output_root))
+    preview = preview_bundle(bundle)
+    _print(
+        {
+            "status": "generated-unverified",
+            "bundle": str(bundle),
+            "aggregate_effect": preview["aggregate_effect"],
+            "plan_sha256": preview["plan_sha256"],
+        }
+    )
+    return 0
+
+
+def _preview(args: argparse.Namespace) -> int:
+    _print(preview_bundle(Path(args.bundle)))
+    return 0
+
+
 def _capture(args: argparse.Namespace) -> int:
     crop_values = (args.x, args.y, args.width, args.height)
     if any(value is not None for value in crop_values):
@@ -175,12 +253,18 @@ def _replay(args: argparse.Namespace) -> int:
         )
         _print({"status": status, "platform": platform_name})
         return 2
-    manifest_path = bundle / "manifest.json"
-    try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise ContractError(f"invalid bundle manifest: {exc}") from exc
-    return run_bundle(bundle)
+    _read_manifest(bundle)
+    parameters_value = getattr(args, "parameters", None)
+    parameters_path = Path(parameters_value) if parameters_value else None
+    if parameters_path is not None and (
+        not parameters_path.is_absolute() or not parameters_path.is_file()
+    ):
+        raise ContractError("parameters must be an existing absolute JSON file")
+    return run_bundle(
+        bundle,
+        parameters_path=parameters_path,
+        confirmed_plan_sha256=getattr(args, "confirmed_plan_sha256", None),
+    )
 
 
 def _locate_image(args: argparse.Namespace) -> int:
@@ -247,6 +331,15 @@ def build_parser() -> argparse.ArgumentParser:
     compile_parser.add_argument("--output-root", required=True)
     compile_parser.set_defaults(handler=_compile)
 
+    compose = subparsers.add_parser("compose")
+    compose.add_argument("--request", required=True)
+    compose.add_argument("--output-root", required=True)
+    compose.set_defaults(handler=_compose)
+
+    preview = subparsers.add_parser("preview")
+    preview.add_argument("--bundle", required=True)
+    preview.set_defaults(handler=_preview)
+
     def add_image_target(command: argparse.ArgumentParser) -> None:
         target = command.add_mutually_exclusive_group(required=True)
         target.add_argument("--window-title-regex")
@@ -280,6 +373,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     replay = subparsers.add_parser("replay")
     replay.add_argument("--bundle", required=True)
+    replay.add_argument("--parameters")
+    replay.add_argument("--confirmed-plan-sha256")
     replay.set_defaults(handler=_replay)
     return parser
 

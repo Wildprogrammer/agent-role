@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Mapping
+
+from agent_workflow_hub.automation_composition.models import ComponentProvenance
 
 
 Lifecycle = Literal["restart", "reuse", "attach-only"]
@@ -37,6 +39,27 @@ class ParameterSpec:
 
 
 @dataclass(frozen=True)
+class DesktopComponentRecovery:
+    steps: tuple["StepSpec", ...]
+    postcondition: "AssertionSpec"
+
+
+@dataclass(frozen=True)
+class DesktopComponentLifecycle:
+    app_id: str
+    component_id: str
+    version: int
+    occurrence_id: str
+    descriptor_sha256: str
+    implementation: str
+    parameter_map: Mapping[str, str]
+    precondition: "AssertionSpec | None"
+    already_complete: "AssertionSpec | None"
+    recovery: DesktopComponentRecovery | None
+    postcondition: "AssertionSpec"
+
+
+@dataclass(frozen=True)
 class StepSpec:
     id: str
     app: str
@@ -46,6 +69,7 @@ class StepSpec:
     retries: int
     timeout_seconds: float
     values: dict[str, object]
+    component: DesktopComponentLifecycle | None = None
 
 
 @dataclass(frozen=True)
@@ -55,6 +79,29 @@ class AssertionSpec:
     threshold: float
     timeout_seconds: float
     stable_seconds: float
+
+
+@dataclass(frozen=True)
+class DesktopComposition:
+    scenario_id: str
+    provenance: tuple[ComponentProvenance, ...]
+
+    def to_mapping(self) -> dict[str, object]:
+        return {
+            "scenario_id": self.scenario_id,
+            "components": [
+                {
+                    "occurrence_id": item.occurrence_id,
+                    "component_id": item.component_id,
+                    "version": item.version,
+                    "descriptor_sha256": item.descriptor_sha256,
+                    "implementation": item.implementation,
+                    "parameter_map": dict(sorted(item.parameter_map.items())),
+                    "asset_sha256": dict(sorted(item.asset_sha256.items())),
+                }
+                for item in self.provenance
+            ],
+        }
 
 
 @dataclass(frozen=True)
@@ -71,3 +118,4 @@ class AutomationRequest:
     decision: Decision
     effective_path_confirmed: bool
     aggregate_effect: Effect
+    composition: DesktopComposition | None = None

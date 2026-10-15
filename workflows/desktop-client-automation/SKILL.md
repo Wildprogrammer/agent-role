@@ -14,7 +14,7 @@ metadata:
   required-capabilities: '["mcp.cua-driver"]'
   config-templates: '{}'
   config-requirements: '{}'
-  entrypoints: '{"doctor":"python <HUB_ROOT>/workflows/desktop-client-automation/scripts/desktop_client_automation.py doctor --host <HOST> --mode <MODE> --cua-mcp <STATUS> --native-computer-use <STATUS>","capture":"python <HUB_ROOT>/workflows/desktop-client-automation/scripts/desktop_client_automation.py capture [--window-title-regex <REGEX> OR --desktop --display-id primary] --output <ABSOLUTE_PNG> [--x N --y N --width N --height N]","locate-image":"python <HUB_ROOT>/workflows/desktop-client-automation/scripts/desktop_client_automation.py locate-image [--window-title-regex <REGEX> OR --desktop --display-id primary] --template <ABSOLUTE_IMAGE> [--threshold 0.8 --timeout-seconds 10]","click-image":"python <HUB_ROOT>/workflows/desktop-client-automation/scripts/desktop_client_automation.py click-image [--window-title-regex <REGEX> OR --desktop --display-id primary] --template <ABSOLUTE_IMAGE> --evidence-dir <ABSOLUTE_DIRECTORY> --action-id <LOWERCASE_ID> [--threshold 0.8 --timeout-seconds 10]","compile":"python <HUB_ROOT>/workflows/desktop-client-automation/scripts/desktop_client_automation.py compile --request <ABSOLUTE_JSON> --output-root <ABSOLUTE_DIRECTORY>","replay":"python <HUB_ROOT>/workflows/desktop-client-automation/scripts/desktop_client_automation.py replay --bundle <ABSOLUTE_AIR_DIRECTORY>"}'
+  entrypoints: '{"doctor":"python <HUB_ROOT>/workflows/desktop-client-automation/scripts/desktop_client_automation.py doctor --host <HOST> --mode <MODE> --cua-mcp <STATUS> --native-computer-use <STATUS>","capture":"python <HUB_ROOT>/workflows/desktop-client-automation/scripts/desktop_client_automation.py capture [--window-title-regex <REGEX> OR --desktop --display-id primary] --output <ABSOLUTE_PNG> [--x N --y N --width N --height N]","locate-image":"python <HUB_ROOT>/workflows/desktop-client-automation/scripts/desktop_client_automation.py locate-image [--window-title-regex <REGEX> OR --desktop --display-id primary] --template <ABSOLUTE_IMAGE> [--threshold 0.8 --timeout-seconds 10]","click-image":"python <HUB_ROOT>/workflows/desktop-client-automation/scripts/desktop_client_automation.py click-image [--window-title-regex <REGEX> OR --desktop --display-id primary] --template <ABSOLUTE_IMAGE> --evidence-dir <ABSOLUTE_DIRECTORY> --action-id <LOWERCASE_ID> [--threshold 0.8 --timeout-seconds 10]","compile":"python <HUB_ROOT>/workflows/desktop-client-automation/scripts/desktop_client_automation.py compile --request <ABSOLUTE_JSON> --output-root <ABSOLUTE_DIRECTORY>","compose":"python <HUB_ROOT>/workflows/desktop-client-automation/scripts/desktop_client_automation.py compose --request <ABSOLUTE_COMPOSITION_REQUEST_JSON> --output-root <ABSOLUTE_DIRECTORY>","preview":"python <HUB_ROOT>/workflows/desktop-client-automation/scripts/desktop_client_automation.py preview --bundle <ABSOLUTE_AIR_DIRECTORY>","replay":"python <HUB_ROOT>/workflows/desktop-client-automation/scripts/desktop_client_automation.py replay --bundle <ABSOLUTE_AIR_DIRECTORY> [--parameters <ABSOLUTE_JSON>] [--confirmed-plan-sha256 <SHA256>]"}'
   supported-hosts: '["codex","openclaw","claude-code","hermes","opencode"]'
 ---
 
@@ -125,6 +125,20 @@ Airtest 使用 `python.airtest` 能力契约和 `workspace/workflows/desktop-cli
 8. 用户选择生成 Windows Airtest 产物时写入确认后的 JSON 并运行 `compile`。图片步骤失败即停止；只有显式 `click-coordinate` 使用坐标，窗口目标采用窗口相对坐标，桌面目标采用主显示器局部坐标。macOS 可由 Cua 动态操作桌面，但请求生成或回放 Airtest 产物时返回 `needs-replay-backend`。
 9. 对普通查询和可证明幂等流程，用户选择固化后可自动回放。创建、提交、发送、删除或未知流程按用户同一次选择执行“仅生成”或“生成并回放”。
 10. 回放时按应用策略关闭、启动或绑定应用，导航到初始页面，执行线性主流程、可选步骤和有限重试，最后要求用户确认的最终锚点持续可见。输出实际状态和证据。
+
+## 可复用组件与场景组合
+
+对同一应用内的重复桌面步骤，可以把最小业务动作定义为精确版本组件，再由线性场景按顺序组合。公开合约分别是 `references/app-component.schema.json`、`references/app-scenario.schema.json` 和 `references/app-composition-request.schema.json`。组件目录使用 `components/<id>/vNNN/component.yaml`，场景必须引用精确版本，不接受 `latest`。单个场景只能绑定一个 Windows 应用；私有图片和机器路径始终保存在 `workspace/` 下，不进入公开示例。
+
+`compose --request <绝对 composition request> --output-root <绝对输出目录>` 在编译期展开组件，复制所需图片，并产生绑定组件描述、资源哈希与顺序的 `plan_sha256`。`preview --bundle <绝对 bundle>` 只读校验 bundle，返回组件、步骤、总副作用等级和计划 SHA，不会输入鼠标或键盘。两次参数化验收必须使用同一 bundle，分别新建 CLI 调用：
+
+```powershell
+python <HUB_ROOT>\workflows\desktop-client-automation\scripts\desktop_client_automation.py compose --request <ABSOLUTE_REQUEST_JSON> --output-root <ABSOLUTE_OUTPUT_ROOT>
+python <HUB_ROOT>\workflows\desktop-client-automation\scripts\desktop_client_automation.py preview --bundle <ABSOLUTE_BUNDLE>
+python <HUB_ROOT>\workflows\desktop-client-automation\scripts\desktop_client_automation.py replay --bundle <ABSOLUTE_BUNDLE> --parameters <ABSOLUTE_PARAMETERS_JSON> --confirmed-plan-sha256 <PLAN_SHA256>
+```
+
+回放依次检查 `already_complete`、`precondition`、最多一次 recovery、主动作和 `postcondition`。稳定失败码包括 `component_precondition_failed`、`component_recovery_failed` 和 `component_postcondition_failed`。图片缺失、匹配歧义或 bundle 资源漂移时立即停止，不回退坐标或 Cua。创建、提交、发送、删除或未知副作用必须显式传入与预览完全一致的 `--confirmed-plan-sha256`。Windows 支持确定性 Airtest 组件回放；macOS 仍仅支持 Cua 动态探索，组合或回放请求返回 `needs-replay-backend`。
 
 ## Bambu Studio 真实回放示例
 

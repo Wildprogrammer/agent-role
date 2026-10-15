@@ -1,0 +1,13 @@
+schema_version: '1.0'
+app_id: example-desktop-app
+id: search-items
+description: Search for one item in the example desktop application.
+parameters:
+  - name: term
+    kind: text
+    default: sample
+    sensitive: false
+components:
+  - use: search-items@1
+    with:
+      query: term

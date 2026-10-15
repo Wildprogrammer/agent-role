@@ -1,0 +1,26 @@
+{
+  "schema_version": "1.0",
+  "scenario": "C:/example/desktop-catalog/scenarios/search-items.yaml",
+  "catalog_root": "C:/example/desktop-catalog",
+  "source_surface": "cua-driver-mcp",
+  "target_platform": "windows",
+  "apps": [
+    {
+      "alias": "example-desktop-app",
+      "target_kind": "application",
+      "lifecycle": "reuse",
+      "executable": "C:/example/ExampleDesktopApp.exe",
+      "launch_args": [],
+      "window_title_regex": "^Example Desktop App$"
+    }
+  ],
+  "success_assertion": {
+    "app": "example-desktop-app",
+    "template": "C:/example/final-state.png",
+    "threshold": 0.85,
+    "timeout_seconds": 10,
+    "stable_seconds": 0.5
+  },
+  "decision": "generate-only",
+  "effective_path_confirmed": true
+}

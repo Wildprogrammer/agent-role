@@ -107,6 +107,10 @@ def test_workflow_documents_driver_and_safety_boundaries() -> None:
         "最多执行一次恢复",
         "direct-ime",
         "pinyin-fallback",
+        "平台无关的共享组合核心",
+        "app-component.schema.json",
+        "app-scenario.schema.json",
+        "app-composition-request.schema.json",
     ):
         assert required in body
 

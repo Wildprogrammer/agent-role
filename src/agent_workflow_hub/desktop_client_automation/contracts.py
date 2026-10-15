@@ -305,6 +305,29 @@ def _step(
     )
 
 
+def _assertion(
+    value: Any,
+    apps: set[str],
+    label: str = "success_assertion",
+) -> AssertionSpec:
+    item = _object(value, label)
+    _closed(item, ASSERTION_FIELDS, label)
+    app = _identifier(item.get("app"), f"{label}.app")
+    if app not in apps:
+        raise ContractError(f"{label} references an unknown app")
+    return AssertionSpec(
+        app=app,
+        template=_existing_image(item.get("template"), f"{label}.template"),
+        threshold=_threshold(item.get("threshold"), f"{label}.threshold"),
+        timeout_seconds=_positive_number(
+            item.get("timeout_seconds"), f"{label}.timeout_seconds", 20
+        ),
+        stable_seconds=_positive_number(
+            item.get("stable_seconds"), f"{label}.stable_seconds", 1
+        ),
+    )
+
+
 def load_request(path: Path) -> AutomationRequest:
     if not path.is_absolute() or not path.is_file():
         raise ContractError("request path must be an existing absolute file")
@@ -350,18 +373,7 @@ def load_request(path: Path) -> AutomationRequest:
     seen: set[str] = set()
     parameter_map = {item.name: item for item in parameters}
     steps = tuple(_step(item, set(aliases), parameter_map, seen) for item in raw_steps)
-    assertion_value = _object(root.get("success_assertion"), "success_assertion")
-    _closed(assertion_value, ASSERTION_FIELDS, "success_assertion")
-    assertion_app = _identifier(assertion_value.get("app"), "success_assertion.app")
-    if assertion_app not in aliases:
-        raise ContractError("success_assertion references an unknown app")
-    assertion = AssertionSpec(
-        app=assertion_app,
-        template=_existing_image(assertion_value.get("template"), "success_assertion.template"),
-        threshold=_threshold(assertion_value.get("threshold"), "success_assertion.threshold"),
-        timeout_seconds=_positive_number(assertion_value.get("timeout_seconds"), "success_assertion.timeout_seconds", 20),
-        stable_seconds=_positive_number(assertion_value.get("stable_seconds"), "success_assertion.stable_seconds", 1),
-    )
+    assertion = _assertion(root.get("success_assertion"), set(aliases))
     aggregate_effect = max((step.effect for step in steps), key=EFFECT_RANK.__getitem__)
     return AutomationRequest(
         source=source,

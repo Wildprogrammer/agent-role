@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import shutil
@@ -7,7 +8,7 @@ from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .models import AutomationRequest
+from .models import AssertionSpec, AutomationRequest, DesktopComponentLifecycle, StepSpec
 
 
 def _next_bundle(output_root: Path, name: str) -> Path:
@@ -21,13 +22,138 @@ def _next_bundle(output_root: Path, name: str) -> Path:
     return output_root / f"{name}-v{max(versions, default=0) + 1:03d}.air"
 
 
-def _copy_asset(source: Path, assets: Path, label: str) -> str:
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(65536), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _copy_asset(
+    source: Path,
+    assets: Path,
+    label: str,
+    records: list[dict[str, object]] | None = None,
+) -> str:
     destination = assets / f"{label}{source.suffix.casefold()}"
     shutil.copy2(source, destination)
-    return destination.relative_to(assets.parent).as_posix()
+    relative = destination.relative_to(assets.parent).as_posix()
+    if records is not None:
+        records.append(
+            {
+                "path": relative,
+                "size": destination.stat().st_size,
+                "sha256": _sha256(destination),
+            }
+        )
+    return relative
+
+
+def _render_assertion(
+    assertion: AssertionSpec | None,
+    assets: Path,
+    label: str,
+    records: list[dict[str, object]] | None,
+) -> dict[str, object] | None:
+    if assertion is None:
+        return None
+    return {
+        "app": assertion.app,
+        "template": _copy_asset(assertion.template, assets, label, records),
+        "threshold": assertion.threshold,
+        "timeout_seconds": assertion.timeout_seconds,
+        "stable_seconds": assertion.stable_seconds,
+    }
+
+
+def _render_plain_step(
+    step: StepSpec,
+    assets: Path,
+    label: str,
+    records: list[dict[str, object]] | None,
+) -> dict[str, object]:
+    item: dict[str, object] = {
+        "id": step.id,
+        "app": step.app,
+        "action": step.action,
+        "effect": step.effect,
+        "optional": step.optional,
+        "retries": step.retries,
+        "timeout_seconds": step.timeout_seconds,
+    }
+    item.update(step.values)
+    if "template" in item:
+        item["template"] = _copy_asset(
+            Path(str(item["template"])), assets, label, records
+        )
+    for key, suffix in (("from_template", "from"), ("to_template", "to")):
+        if key in item:
+            item[key] = _copy_asset(
+                Path(str(item[key])), assets, f"{label}-{suffix}", records
+            )
+    return item
+
+
+def _render_component(
+    component: DesktopComponentLifecycle,
+    assets: Path,
+    index: int,
+    records: list[dict[str, object]] | None,
+) -> dict[str, object]:
+    recovery = None
+    if component.recovery is not None:
+        recovery = {
+            "steps": [
+                _render_plain_step(
+                    step,
+                    assets,
+                    f"{index:03d}-{component.occurrence_id}-recovery-{step_index:03d}",
+                    records,
+                )
+                for step_index, step in enumerate(component.recovery.steps, start=1)
+            ],
+            "postcondition": _render_assertion(
+                component.recovery.postcondition,
+                assets,
+                f"{index:03d}-{component.occurrence_id}-recovery-postcondition",
+                records,
+            ),
+        }
+    return {
+        "app_id": component.app_id,
+        "id": component.component_id,
+        "version": component.version,
+        "occurrence_id": component.occurrence_id,
+        "descriptor_sha256": component.descriptor_sha256,
+        "implementation": component.implementation,
+        "parameter_map": dict(sorted(component.parameter_map.items())),
+        "precondition": _render_assertion(
+            component.precondition,
+            assets,
+            f"{index:03d}-{component.occurrence_id}-precondition",
+            records,
+        ),
+        "already_complete": _render_assertion(
+            component.already_complete,
+            assets,
+            f"{index:03d}-{component.occurrence_id}-already-complete",
+            records,
+        ),
+        "recovery": recovery,
+        "postcondition": _render_assertion(
+            component.postcondition,
+            assets,
+            f"{index:03d}-{component.occurrence_id}-postcondition",
+            records,
+        ),
+    }
 
 
 def _manifest(request: AutomationRequest, assets: Path) -> dict[str, object]:
+    asset_records: list[dict[str, object]] | None = (
+        [] if request.composition is not None else None
+    )
     apps = []
     for app in request.apps:
         item = asdict(app)
@@ -45,32 +171,28 @@ def _manifest(request: AutomationRequest, assets: Path) -> dict[str, object]:
     parameters = [asdict(parameter) for parameter in request.parameters]
     steps: list[dict[str, object]] = []
     for index, step in enumerate(request.steps, start=1):
-        item: dict[str, object] = {
-            "id": step.id,
-            "app": step.app,
-            "action": step.action,
-            "effect": step.effect,
-            "optional": step.optional,
-            "retries": step.retries,
-            "timeout_seconds": step.timeout_seconds,
-        }
-        item.update(step.values)
-        if "template" in item:
-            item["template"] = _copy_asset(
-                Path(str(item["template"])), assets, f"{index:03d}-{step.id}"
+        item = _render_plain_step(
+            step,
+            assets,
+            f"{index:03d}-{step.id}",
+            asset_records,
+        )
+        if step.component is not None:
+            item["component"] = _render_component(
+                step.component,
+                assets,
+                index,
+                asset_records,
             )
-        for key, suffix in (("from_template", "from"), ("to_template", "to")):
-            if key in item:
-                item[key] = _copy_asset(
-                    Path(str(item[key])), assets, f"{index:03d}-{step.id}-{suffix}"
-                )
         steps.append(item)
 
-    assertion = asdict(request.success_assertion)
-    assertion["template"] = _copy_asset(
-        request.success_assertion.template, assets, "success-assertion"
+    assertion = _render_assertion(
+        request.success_assertion,
+        assets,
+        "success-assertion",
+        asset_records,
     )
-    return {
+    manifest: dict[str, object] = {
         "schema_version": "1.0",
         "workflow": "desktop-client-automation",
         "name": request.name,
@@ -87,6 +209,34 @@ def _manifest(request: AutomationRequest, assets: Path) -> dict[str, object]:
         "parameters": parameters,
         "steps": steps,
         "success_assertion": assertion,
+    }
+    if request.composition is not None:
+        manifest["component_provenance"] = request.composition.to_mapping()
+        manifest["assets"] = sorted(
+            asset_records or [], key=lambda item: str(item["path"])
+        )
+        manifest["plan_sha256"] = hashlib.sha256(
+            json.dumps(
+                _canonical_plan(manifest),
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+    return manifest
+
+
+def _canonical_plan(manifest: dict[str, object]) -> dict[str, object]:
+    return {
+        key: value
+        for key, value in manifest.items()
+        if key
+        not in {
+            "generated_at",
+            "plan_sha256",
+            "source_request",
+            "status",
+        }
     }
 
 
@@ -120,6 +270,13 @@ def compile_bundle(request: AutomationRequest, output_root: Path) -> Path:
             Path(__file__).with_name("airtest_runtime.py"),
             bundle / "_airtest_runtime.py",
         )
+        if request.composition is not None:
+            shutil.copy2(
+                Path(__file__).parents[1]
+                / "automation_composition"
+                / "lifecycle.py",
+                bundle / "_automation_lifecycle.py",
+            )
         (bundle / "parameters.example.json").write_text(
             json.dumps(
                 {

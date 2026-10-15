@@ -1,9 +1,20 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 
+import yaml
+from jsonschema import Draft202012Validator
+from PIL import Image
+
 from agent_workflow_hub.catalog import load_repository_catalog
+from agent_workflow_hub.desktop_client_automation.composition import compose_bundle
+from agent_workflow_hub.desktop_client_automation.composition_contracts import (
+    load_component,
+    load_composition_request,
+    load_scenario,
+)
 from agent_workflow_hub.contracts import workflow_entrypoints
 from agent_workflow_hub.frontmatter import parse_markdown
 from agent_workflow_hub.repository import REQUIRED_HEADINGS, validate_skill
@@ -12,6 +23,12 @@ from agent_workflow_hub.repository import REQUIRED_HEADINGS, validate_skill
 SKILL = Path(__file__).resolve().parents[1] / "SKILL.md"
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 README = REPOSITORY_ROOT / "README.md"
+REFERENCES = SKILL.parent / "references"
+EXAMPLES = (
+    REFERENCES / "app-component.example.yaml",
+    REFERENCES / "app-scenario.example.yaml",
+    REFERENCES / "app-composition-request.example.json",
+)
 
 
 def test_request_schema_exposes_primary_desktop_target() -> None:
@@ -84,7 +101,8 @@ def test_skill_uses_cua_for_cross_host_exploration_and_airtest_for_windows_repla
     assert "图片失败不得静默回退坐标" in body
     assert "不依赖或复制 `automated-test-lifecycle`" in body
     assert set(workflow_entrypoints(contract.metadata)) == {
-        "doctor", "capture", "locate-image", "click-image", "compile", "replay"
+        "doctor", "capture", "locate-image", "click-image", "compile",
+        "compose", "preview", "replay"
     }
     for heading in REQUIRED_HEADINGS:
         assert f"## {heading}" in body
@@ -180,3 +198,70 @@ def test_launcher_does_not_mix_python_311_packages_into_system_python() -> None:
     assert "_RUNTIME_PYTHON" in launcher
     assert "subprocess.run" in launcher
     assert "site-packages" not in launcher
+
+
+def test_desktop_workflow_declares_composition_contracts() -> None:
+    text = SKILL.read_text(encoding="utf-8")
+    for name in (
+        "app-component.schema.json",
+        "app-scenario.schema.json",
+        "app-composition-request.schema.json",
+        " compose ",
+        "component_precondition_failed",
+    ):
+        assert name in text
+
+
+def test_public_examples_are_portable_and_secret_free() -> None:
+    combined = "\n".join(path.read_text(encoding="utf-8") for path in EXAMPLES)
+    assert "C:\\Users\\" not in combined
+    assert "/home/" not in combined
+    assert "serial" not in combined.casefold()
+    assert "bambu" not in combined.casefold()
+    assert "example-desktop-app" in combined
+
+
+def test_public_component_examples_match_schemas_and_loaders(
+    tmp_path: Path,
+) -> None:
+    component_value = yaml.safe_load(EXAMPLES[0].read_text(encoding="utf-8"))
+    scenario_value = yaml.safe_load(EXAMPLES[1].read_text(encoding="utf-8"))
+    request_value = json.loads(EXAMPLES[2].read_text(encoding="utf-8"))
+    for value, schema_name in (
+        (component_value, "app-component.schema.json"),
+        (scenario_value, "app-scenario.schema.json"),
+        (request_value, "app-composition-request.schema.json"),
+    ):
+        Draft202012Validator(
+            json.loads((REFERENCES / schema_name).read_text(encoding="utf-8"))
+        ).validate(value)
+
+    catalog = (tmp_path / "catalog").resolve()
+    version_root = catalog / "components" / "search-items" / "v001"
+    scenario_root = catalog / "scenarios"
+    version_root.mkdir(parents=True)
+    scenario_root.mkdir(parents=True)
+    shutil.copyfile(EXAMPLES[0], version_root / "component.yaml")
+    shutil.copyfile(EXAMPLES[1], scenario_root / "search-items.yaml")
+    for name, color in (
+        ("search-button.png", "red"),
+        ("search-ready.png", "green"),
+        ("results-ready.png", "blue"),
+    ):
+        Image.new("RGB", (12, 12), color).save(version_root / name)
+    final_state = (tmp_path / "final-state.png").resolve()
+    Image.new("RGB", (12, 12), "white").save(final_state)
+    request_value["catalog_root"] = str(catalog)
+    request_value["scenario"] = str((scenario_root / "search-items.yaml").resolve())
+    request_value["success_assertion"]["template"] = str(final_state)
+    request_path = (tmp_path / "request.json").resolve()
+    request_path.write_text(json.dumps(request_value), encoding="utf-8")
+
+    request = load_composition_request(request_path)
+    scenario = load_scenario(request.scenario, catalog_root=request.catalog_root)
+    component = load_component(
+        version_root / "component.yaml", catalog_root=request.catalog_root
+    )
+    assert scenario.app_id == "example-desktop-app"
+    assert component.id == "search-items"
+    assert compose_bundle(request, (tmp_path / "outputs").resolve()).is_dir()

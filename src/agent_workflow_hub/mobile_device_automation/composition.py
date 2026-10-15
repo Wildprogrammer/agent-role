@@ -1,9 +1,27 @@
 from __future__ import annotations
 
-import re
-from dataclasses import replace
+import hashlib
+from dataclasses import dataclass, replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import Mapping
+
+from agent_workflow_hub.automation_composition.contracts import (
+    CompositionContractError,
+)
+from agent_workflow_hub.automation_composition.engine import (
+    ExpandedComponent,
+    compose_scenario,
+    inspect_placeholders,
+    rewrite_placeholders,
+)
+from agent_workflow_hub.automation_composition.models import (
+    ComponentDefinition,
+    ComponentProvenance,
+    ComponentUse,
+    Effect,
+    ScenarioDefinition,
+)
 
 from .composition_contracts import (
     component_descriptor_path,
@@ -11,7 +29,7 @@ from .composition_contracts import (
     load_scenario,
 )
 from .composition_models import AppComponentSpec, CompositionRequest, TextInputMode
-from .contracts import ContractError, EFFECT_RANK, IDENTIFIER
+from .contracts import ContractError
 from .models import (
     AssertionSpec,
     AutomationRequest,
@@ -20,10 +38,6 @@ from .models import (
     StepSpec,
 )
 from .renderer import compile_bundle
-
-
-PLACEHOLDER = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
-BRACED_TOKEN = re.compile(r"\$\{([^}]*)\}")
 
 
 def _parameter_error(message: str) -> ContractError:
@@ -43,15 +57,10 @@ def _select_implementation(
 
 
 def _inspect_tokens(text: str, *, label: str) -> set[str]:
-    if "`" in text or "$(" in text:
-        raise _parameter_error(f"{label} contains executable placeholder syntax")
-    tokens = BRACED_TOKEN.findall(text)
-    if "${" in text and len(tokens) != text.count("${"):
-        raise _parameter_error(f"{label} contains malformed placeholder syntax")
-    for token in tokens:
-        if not IDENTIFIER.fullmatch(token):
-            raise _parameter_error(f"{label} contains unsupported placeholder syntax")
-    return set(tokens)
+    try:
+        return inspect_placeholders(text, label)
+    except CompositionContractError as exc:
+        raise ContractError(str(exc)) from exc
 
 
 def _rewrite_text(
@@ -60,16 +69,10 @@ def _rewrite_text(
     parameter_map: dict[str, str],
     label: str,
 ) -> tuple[str, set[str]]:
-    tokens = _inspect_tokens(text, label=label)
-    unknown = tokens - set(parameter_map)
-    if unknown:
-        raise _parameter_error(
-            f"{label} references undeclared component parameters: {', '.join(sorted(unknown))}"
-        )
-    rewritten = PLACEHOLDER.sub(
-        lambda match: "${" + parameter_map[match.group(1)] + "}", text
-    )
-    return rewritten, tokens
+    try:
+        return rewrite_placeholders(text, parameter_map, label)
+    except CompositionContractError as exc:
+        raise ContractError(str(exc)) from exc
 
 
 def _rewrite_assertion(
@@ -126,42 +129,53 @@ def _implementation_parameter_union(
     return result
 
 
-def compose_automation_request(
-    request: CompositionRequest, *, staging_root: Path
-) -> AutomationRequest:
-    scenario = load_scenario(request.scenario, catalog_root=request.catalog_root)
-    stage = staging_root.resolve(strict=False)
-    if stage.exists() and not stage.is_dir():
-        raise ContractError("component_catalog_invalid: staging_root must be a directory")
-    stage.mkdir(parents=True, exist_ok=True)
-    scenario_parameters = {parameter.name for parameter in scenario.parameters}
-    steps: list[StepSpec] = []
+@dataclass(frozen=True)
+class _SelectedImplementation:
+    key: str
+    path: Path
 
-    for position, use in enumerate(scenario.components, start=1):
-        component = load_component(
-            component_descriptor_path(
-                request.catalog_root, use.component_id, use.version
-            ),
-            catalog_root=request.catalog_root,
-        )
-        if component.app_id != scenario.app_id:
-            raise ContractError("component_catalog_invalid: component app_id mismatch")
-        parameter_map = dict(sorted(use.parameter_map.items()))
-        expected_parameters = set(component.parameters)
-        if set(parameter_map) != expected_parameters:
-            raise _parameter_error(
-                f"{component.id}@{component.version} mapping must cover exactly its declared parameters"
+
+class MobileCompositionAdapter:
+    def __init__(self, request: CompositionRequest, stage: Path) -> None:
+        self.request = request
+        self.stage = stage
+
+    def validate_component_payload(
+        self,
+        component: ComponentDefinition[
+            AssertionSpec, Path, object
+        ],
+        catalog_root: Path,
+    ) -> None:
+        try:
+            component.source.relative_to(catalog_root)
+        except ValueError as exc:
+            raise ContractError(
+                "component_catalog_invalid: component descriptor must be inside the catalog"
+            ) from exc
+
+    def select_implementation(
+        self,
+        component: ComponentDefinition[AssertionSpec, Path, object],
+        request: object,
+    ) -> _SelectedImplementation:
+        key, path = _select_implementation(component, self.request.text_input_mode)
+        return _SelectedImplementation(key=key, path=path)
+
+    def expand_component(
+        self,
+        component: ComponentDefinition[AssertionSpec, Path, object],
+        use: ComponentUse,
+        implementation: object,
+        occurrence_id: str,
+    ) -> ExpandedComponent[StepSpec]:
+        if not isinstance(implementation, _SelectedImplementation):
+            raise ContractError(
+                "component_catalog_invalid: unsupported mobile implementation"
             )
-        if not set(parameter_map.values()).issubset(scenario_parameters):
-            raise _parameter_error("mapping references an unknown scenario parameter")
-
+        parameter_map = dict(use.parameter_map)
         used_parameters = _implementation_parameter_union(component, parameter_map)
-
-        implementation_key, implementation = _select_implementation(
-            component, request.text_input_mode
-        )
-        occurrence_id = f"c{position:03d}-{component.id}"
-        occurrence_root = stage / occurrence_id
+        occurrence_root = self.stage / occurrence_id
         try:
             occurrence_root.mkdir(exist_ok=False)
         except FileExistsError as exc:
@@ -170,13 +184,12 @@ def compose_automation_request(
             ) from exc
 
         action, tokens = _materialize_script(
-            implementation,
+            implementation.path,
             occurrence_root / "action.ad",
             parameter_map=parameter_map,
             label=f"{occurrence_id} action",
         )
         used_parameters.update(tokens)
-
         precondition, tokens = _rewrite_assertion(
             component.precondition,
             parameter_map=parameter_map,
@@ -196,19 +209,22 @@ def compose_automation_request(
         )
         used_parameters.update(tokens)
         if postcondition is None:
-            raise ContractError("component_catalog_invalid: component postcondition is required")
+            raise ContractError(
+                "component_catalog_invalid: component postcondition is required"
+            )
 
         recovery = None
-        if component.recovery is not None:
+        mobile_recovery = component.recovery
+        if mobile_recovery is not None:
             recovery_script, tokens = _materialize_script(
-                component.recovery.script,
+                mobile_recovery.script,
                 occurrence_root / "recovery.ad",
                 parameter_map=parameter_map,
                 label=f"{occurrence_id} recovery",
             )
             used_parameters.update(tokens)
             recovery_postcondition, tokens = _rewrite_assertion(
-                component.recovery.postcondition,
+                mobile_recovery.postcondition,
                 parameter_map=parameter_map,
                 label=f"{occurrence_id} recovery postcondition",
             )
@@ -222,56 +238,116 @@ def compose_automation_request(
                 postcondition=recovery_postcondition,
             )
 
-        if used_parameters != expected_parameters:
-            unused = expected_parameters - used_parameters
-            raise _parameter_error(
-                f"{component.id}@{component.version} has unused mappings: {', '.join(sorted(unused))}"
-            )
-
         lifecycle = ComponentLifecycleSpec(
             app_id=component.app_id,
             component_id=component.id,
             version=component.version,
             occurrence_id=occurrence_id,
             descriptor_sha256=component.descriptor_sha256,
-            text_input_mode=request.text_input_mode,
-            implementation=implementation_key,
+            text_input_mode=self.request.text_input_mode,
+            implementation=implementation.key,
             parameter_map=parameter_map,
             precondition=precondition,
             already_complete=already_complete,
             recovery=recovery,
         )
-        steps.append(
-            StepSpec(
-                id=occurrence_id,
-                runner="agent-device",
-                effect=component.effect,
-                timeout_seconds=component.timeout_seconds,
-                script=action,
-                action=None,
-                template=None,
-                threshold=None,
-                assertion=postcondition,
-                component=lifecycle,
-            )
+        step = StepSpec(
+            id=occurrence_id,
+            runner="agent-device",
+            effect=component.effect,
+            timeout_seconds=component.timeout_seconds,
+            script=action,
+            action=None,
+            template=None,
+            threshold=None,
+            assertion=postcondition,
+            component=lifecycle,
+        )
+        return ExpandedComponent(
+            occurrence_id=occurrence_id,
+            component_id=component.id,
+            version=component.version,
+            descriptor_sha256=component.descriptor_sha256,
+            effect=component.effect,
+            parameter_map=parameter_map,
+            used_parameters=frozenset(used_parameters),
+            implementation=implementation.key,
+            asset_sha256={},
+            payload=step,
         )
 
-    aggregate_effect = max(
-        (step.effect for step in steps), key=EFFECT_RANK.__getitem__
-    )
-    return AutomationRequest(
-        source=request.source,
-        name=scenario.id,
-        description=scenario.description,
-        source_surface=request.source_surface,
-        target_platform=request.target_platform,
-        device=request.device,
-        parameters=scenario.parameters,
-        steps=tuple(steps),
-        decision=request.decision,
-        effective_path_confirmed=request.effective_path_confirmed,
-        aggregate_effect=aggregate_effect,
-    )
+    def collect_assets(
+        self,
+        component: ComponentDefinition[AssertionSpec, Path, object],
+        implementation: object,
+    ) -> Mapping[str, str]:
+        if not isinstance(implementation, _SelectedImplementation):
+            raise ContractError(
+                "component_catalog_invalid: unsupported mobile implementation"
+            )
+        assets = {
+            "action.ad": hashlib.sha256(implementation.path.read_bytes()).hexdigest()
+        }
+        mobile_recovery = component.recovery
+        if mobile_recovery is not None:
+            assets["recovery.ad"] = hashlib.sha256(
+                mobile_recovery.script.read_bytes()
+            ).hexdigest()
+        return assets
+
+    def build_platform_request(
+        self,
+        scenario: ScenarioDefinition[object],
+        expanded: tuple[ExpandedComponent[StepSpec], ...],
+        provenance: tuple[ComponentProvenance, ...],
+        aggregate_effect: Effect,
+        request: object,
+    ) -> AutomationRequest:
+        return AutomationRequest(
+            source=self.request.source,
+            name=scenario.id,
+            description=scenario.description,
+            source_surface=self.request.source_surface,
+            target_platform=self.request.target_platform,
+            device=self.request.device,
+            parameters=scenario.parameters,
+            steps=tuple(item.payload for item in expanded),
+            decision=self.request.decision,
+            effective_path_confirmed=self.request.effective_path_confirmed,
+            aggregate_effect=aggregate_effect,
+        )
+
+
+def compose_automation_request(
+    request: CompositionRequest, *, staging_root: Path
+) -> AutomationRequest:
+    scenario = load_scenario(request.scenario, catalog_root=request.catalog_root)
+    stage = staging_root.resolve(strict=False)
+    if stage.exists() and not stage.is_dir():
+        raise ContractError("component_catalog_invalid: staging_root must be a directory")
+    stage.mkdir(parents=True, exist_ok=True)
+    adapter = MobileCompositionAdapter(request, stage)
+
+    def load_exact_component(use: ComponentUse) -> AppComponentSpec:
+        return load_component(
+            component_descriptor_path(
+                request.catalog_root,
+                use.component_id,
+                use.version,
+            ),
+            catalog_root=request.catalog_root,
+        )
+
+    try:
+        return compose_scenario(
+            scenario,
+            request,
+            request.catalog_root,
+            load_exact_component,
+            adapter,
+        )
+    except CompositionContractError as exc:
+        raise ContractError(str(exc)) from exc
 
 
 def compose_bundle(request: CompositionRequest, output_root: Path) -> Path:
