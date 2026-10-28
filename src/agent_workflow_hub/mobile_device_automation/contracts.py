@@ -60,8 +60,19 @@ STEP_FIELDS = {
     "template",
     "threshold",
     "assertion",
+    "match_policy",
+    "click_offset",
 }
-ASSERTION_FIELDS = {"kind", "selector", "template", "threshold", "timeout_seconds"}
+ASSERTION_FIELDS = {
+    "kind",
+    "selector",
+    "template",
+    "threshold",
+    "timeout_seconds",
+    "match_policy",
+    "mode",
+    "items",
+}
 
 MANIFEST_FIELDS = {
     "schema_version",
@@ -154,6 +165,26 @@ def _threshold(value: Any, label: str, *, default: float = 0.85) -> float:
     ):
         raise ContractError(f"{label} must be a finite number greater than zero and at most one")
     return float(number)
+
+
+def _match_policy(value: Any, label: str, *, default: str = "best") -> str:
+    policy = default if value is None else value
+    if policy not in {"best", "unique"}:
+        raise ContractError(f"{label} must be best or unique")
+    return str(policy)
+
+
+def _click_offset(value: Any, label: str) -> tuple[int, int] | None:
+    if value is None:
+        return None
+    item = _object(value, label)
+    _closed(item, {"x", "y"}, label)
+    if set(item) != {"x", "y"}:
+        raise ContractError(f"{label} must contain x and y")
+    values = (item["x"], item["y"])
+    if any(isinstance(part, bool) or not isinstance(part, int) for part in values):
+        raise ContractError(f"{label} x and y must be integers")
+    return int(values[0]), int(values[1])
 
 
 def _source_file(value: Any, label: str, suffixes: set[str]) -> Path:
@@ -320,6 +351,35 @@ def _assertion(value: Any, label: str, *, manifest: bool = False) -> AssertionSp
     allowed = MANIFEST_ASSERTION_FIELDS if manifest else ASSERTION_FIELDS
     _closed(item, allowed, label)
     kind = item.get("kind")
+    if kind == "group":
+        forbidden = {
+            "selector",
+            "template",
+            "threshold",
+            "timeout_seconds",
+            "match_policy",
+            "source_sha256",
+        } & set(item)
+        if forbidden:
+            raise ContractError(f"{label} group has incompatible fields")
+        mode = item.get("mode")
+        if mode not in {"any", "all"}:
+            raise ContractError(f"{label}.mode must be any or all")
+        raw_items = item.get("items")
+        if not isinstance(raw_items, list) or not raw_items:
+            raise ContractError(f"{label}.items must be a non-empty list")
+        return AssertionSpec(
+            kind="group",
+            selector=None,
+            template=None,
+            threshold=None,
+            timeout_seconds=0.0,
+            mode=mode,
+            items=tuple(
+                _assertion(child, f"{label}.items[{index}]", manifest=manifest)
+                for index, child in enumerate(raw_items)
+            ),
+        )
     timeout = _positive_number(
         item.get("timeout_seconds"), f"{label}.timeout_seconds", default=10.0
     )
@@ -333,6 +393,7 @@ def _assertion(value: Any, label: str, *, manifest: bool = False) -> AssertionSp
             template=None,
             threshold=None,
             timeout_seconds=timeout,
+            match_policy=None,
         )
     if kind == "image-visible":
         if "selector" in item:
@@ -350,6 +411,9 @@ def _assertion(value: Any, label: str, *, manifest: bool = False) -> AssertionSp
             template=template,
             threshold=_threshold(item.get("threshold"), f"{label}.threshold"),
             timeout_seconds=timeout,
+            match_policy=_match_policy(
+                item.get("match_policy"), f"{label}.match_policy"
+            ),
         )
     raise ContractError(f"{label}.kind is unsupported")
 
@@ -393,7 +457,7 @@ def _step(value: Any, seen: set[str]) -> StepSpec:
         assertion = _assertion(item["assertion"], f"step {step_id} assertion")
 
     if runner == "agent-device":
-        forbidden = {"action", "template", "threshold"} & set(item)
+        forbidden = {"action", "template", "threshold", "match_policy", "click_offset"} & set(item)
         if forbidden:
             raise ContractError(f"step {step_id} agent-device has incompatible fields")
         script = _script(item.get("script"), f"step {step_id} script", effect)
@@ -407,6 +471,8 @@ def _step(value: Any, seen: set[str]) -> StepSpec:
             template=None,
             threshold=None,
             assertion=assertion,
+            match_policy=None,
+            click_offset=None,
         )
 
     if runner == "airtest":
@@ -415,8 +481,16 @@ def _step(value: Any, seen: set[str]) -> StepSpec:
         action = item.get("action")
         if action not in {"click-image", "wait-image"}:
             raise ContractError(f"step {step_id} action is unsupported")
-        if action == "click-image" and assertion is None:
-            raise ContractError(f"step {step_id} click-image requires an assertion")
+        if action == "click-image" and assertion is None and effect not in {
+            "none",
+            "read",
+            "idempotent",
+        }:
+            raise ContractError(
+                f"step {step_id} side-effecting click-image requires an assertion"
+            )
+        if action == "wait-image" and "click_offset" in item:
+            raise ContractError(f"step {step_id} wait-image must omit click_offset")
         return StepSpec(
             id=step_id,
             runner=runner,
@@ -427,6 +501,12 @@ def _step(value: Any, seen: set[str]) -> StepSpec:
             template=_image(item.get("template"), f"step {step_id} template"),
             threshold=_threshold(item.get("threshold"), f"step {step_id} threshold"),
             assertion=assertion,
+            match_policy=_match_policy(
+                item.get("match_policy"), f"step {step_id} match_policy"
+            ),
+            click_offset=_click_offset(
+                item.get("click_offset"), f"step {step_id} click_offset"
+            ),
         )
     raise ContractError(f"step {step_id} runner is unsupported")
 
@@ -502,6 +582,12 @@ def _sha256_file(path: Path) -> str:
 def _assertion_payload(assertion: AssertionSpec | None) -> dict[str, object] | None:
     if assertion is None:
         return None
+    if assertion.kind == "group":
+        return {
+            "kind": "group",
+            "mode": assertion.mode,
+            "items": [_assertion_payload(item) for item in assertion.items],
+        }
     payload: dict[str, object] = {
         "kind": assertion.kind,
         "timeout_seconds": assertion.timeout_seconds,
@@ -513,6 +599,7 @@ def _assertion_payload(assertion: AssertionSpec | None) -> dict[str, object] | N
             {
                 "source_sha256": _sha256_file(assertion.template),
                 "threshold": assertion.threshold,
+                "match_policy": assertion.match_policy,
             }
         )
     return payload
@@ -570,6 +657,12 @@ def plan_payload(request: AutomationRequest) -> dict[str, object]:
                     "action": step.action,
                     "source_sha256": _sha256_file(step.template),
                     "threshold": step.threshold,
+                    "match_policy": step.match_policy,
+                    "click_offset": (
+                        None
+                        if step.click_offset is None
+                        else {"x": step.click_offset[0], "y": step.click_offset[1]}
+                    ),
                 }
             )
         steps.append(item)
@@ -767,14 +860,22 @@ def _manifest_step(value: Any, seen: set[str]) -> dict[str, object]:
         result["source_sha256"] = _sha256_text(
             item.get("source_sha256"), f"manifest step {step_id}.source_sha256"
         )
-        if {"action", "template", "threshold"} & set(item):
+        if {"action", "template", "threshold", "match_policy", "click_offset"} & set(item):
             raise ContractError(f"manifest step {step_id} has incompatible fields")
     elif runner == "airtest":
         action = item.get("action")
         if action not in {"click-image", "wait-image"}:
             raise ContractError(f"manifest step {step_id} action is unsupported")
-        if action == "click-image" and assertion_value is None:
-            raise ContractError(f"manifest step {step_id} click-image requires an assertion")
+        if action == "click-image" and assertion_value is None and effect not in {
+            "none",
+            "read",
+            "idempotent",
+        }:
+            raise ContractError(
+                f"manifest step {step_id} side-effecting click-image requires an assertion"
+            )
+        if action == "wait-image" and "click_offset" in item:
+            raise ContractError(f"manifest step {step_id} wait-image must omit click_offset")
         result.update(
             {
                 "action": action,
@@ -788,8 +889,17 @@ def _manifest_step(value: Any, seen: set[str]) -> dict[str, object]:
                 "threshold": _threshold(
                     item.get("threshold"), f"manifest step {step_id}.threshold"
                 ),
+                "match_policy": _match_policy(
+                    item.get("match_policy"),
+                    f"manifest step {step_id}.match_policy",
+                ),
             }
         )
+        click_offset = _click_offset(
+            item.get("click_offset"), f"manifest step {step_id}.click_offset"
+        )
+        if click_offset is not None:
+            result["click_offset"] = {"x": click_offset[0], "y": click_offset[1]}
         if "script" in item:
             raise ContractError(f"manifest step {step_id} airtest must omit script")
     else:

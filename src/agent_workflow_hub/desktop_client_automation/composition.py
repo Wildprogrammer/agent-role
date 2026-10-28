@@ -59,6 +59,7 @@ def _assertion(value: DesktopAssertionSpec | None, app_id: str) -> AssertionSpec
         threshold=value.threshold,
         timeout_seconds=value.timeout_seconds,
         stable_seconds=value.stable_seconds,
+        match_policy=value.match_policy,
     )
 
 

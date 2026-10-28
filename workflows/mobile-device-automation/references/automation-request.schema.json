@@ -125,13 +125,29 @@
         "kind": {"const": "image-visible"},
         "template": {"$ref": "#/$defs/absolutePath"},
         "threshold": {"$ref": "#/$defs/threshold"},
-        "timeout_seconds": {"$ref": "#/$defs/positiveNumber"}
+        "timeout_seconds": {"$ref": "#/$defs/positiveNumber"},
+        "match_policy": {"enum": ["best", "unique"], "default": "best"}
+      }
+    },
+    "assertionGroup": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "mode", "items"],
+      "properties": {
+        "kind": {"const": "group"},
+        "mode": {"enum": ["any", "all"]},
+        "items": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/assertion"}
+        }
       }
     },
     "assertion": {
       "oneOf": [
         {"$ref": "#/$defs/selectorAssertion"},
-        {"$ref": "#/$defs/imageAssertion"}
+        {"$ref": "#/$defs/imageAssertion"},
+        {"$ref": "#/$defs/assertionGroup"}
       ]
     },
     "agentDeviceStep": {
@@ -169,12 +185,29 @@
           ]
         },
         "threshold": {"$ref": "#/$defs/threshold"},
+        "match_policy": {"enum": ["best", "unique"], "default": "best"},
+        "click_offset": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["x", "y"],
+          "properties": {"x": {"type": "integer"}, "y": {"type": "integer"}}
+        },
         "assertion": {"$ref": "#/$defs/assertion"}
       },
       "allOf": [
         {
-          "if": {"properties": {"action": {"const": "click-image"}}, "required": ["action"]},
+          "if": {
+            "properties": {
+              "action": {"const": "click-image"},
+              "effect": {"enum": ["create", "submit", "send", "delete"]}
+            },
+            "required": ["action", "effect"]
+          },
           "then": {"required": ["assertion"]}
+        },
+        {
+          "if": {"properties": {"action": {"const": "wait-image"}}, "required": ["action"]},
+          "then": {"not": {"required": ["click_offset"]}}
         }
       ]
     },

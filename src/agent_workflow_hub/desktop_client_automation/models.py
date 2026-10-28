@@ -74,11 +74,14 @@ class StepSpec:
 
 @dataclass(frozen=True)
 class AssertionSpec:
-    app: str
-    template: Path
-    threshold: float
+    app: str | None
+    template: Path | None
+    threshold: float | None
     timeout_seconds: float
     stable_seconds: float
+    match_policy: Literal["best", "unique"] = "best"
+    mode: Literal["any", "all"] | None = None
+    items: tuple["AssertionSpec", ...] = ()
 
 
 @dataclass(frozen=True)

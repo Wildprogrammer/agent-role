@@ -58,12 +58,29 @@ def _render_assertion(
 ) -> dict[str, object] | None:
     if assertion is None:
         return None
+    if assertion.mode is not None:
+        return {
+            "kind": "group",
+            "mode": assertion.mode,
+            "items": [
+                _render_assertion(
+                    child,
+                    assets,
+                    f"{label}-{index:03d}",
+                    records,
+                )
+                for index, child in enumerate(assertion.items, start=1)
+            ],
+        }
+    if assertion.app is None or assertion.template is None or assertion.threshold is None:
+        raise ValueError(f"{label} assertion is incomplete")
     return {
         "app": assertion.app,
         "template": _copy_asset(assertion.template, assets, label, records),
         "threshold": assertion.threshold,
         "timeout_seconds": assertion.timeout_seconds,
         "stable_seconds": assertion.stable_seconds,
+        "match_policy": assertion.match_policy,
     }
 
 

@@ -88,6 +88,7 @@ def test_replay_forwards_parameter_file_and_confirmed_digest(
         "bundle": bundle,
         "parameters_path": parameters,
         "confirmed_plan_sha256": digest,
+        "evidence_mode": "on-failure",
     }
 
 

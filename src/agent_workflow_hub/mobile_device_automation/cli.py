@@ -327,6 +327,7 @@ def _locate(args: argparse.Namespace) -> tuple[int, dict[str, object]]:
         template_path=template,
         threshold=args.threshold,
         timeout_seconds=args.timeout_seconds,
+        match_policy=args.match_policy,
         dependencies_factory=runtime.dependencies_factory,
     )
     return 0, result
@@ -345,6 +346,9 @@ def _click(args: argparse.Namespace) -> tuple[int, dict[str, object]]:
         action_id=args.action_id,
         threshold=args.threshold,
         timeout_seconds=args.timeout_seconds,
+        match_policy=args.match_policy,
+        click_offset=(args.offset_x, args.offset_y),
+        evidence_mode=args.evidence_mode,
         dependencies_factory=runtime.dependencies_factory,
     )
     return 0, result
@@ -427,6 +431,7 @@ def build_parser() -> argparse.ArgumentParser:
     locate.add_argument("--template", required=True)
     locate.add_argument("--threshold", type=_threshold, default=0.85)
     locate.add_argument("--timeout-seconds", type=_positive_float, default=10.0)
+    locate.add_argument("--match-policy", choices=("best", "unique"), default="unique")
     locate.set_defaults(handler=_locate)
 
     click = commands.add_parser("click-image")
@@ -436,6 +441,10 @@ def build_parser() -> argparse.ArgumentParser:
     click.add_argument("--action-id", required=True)
     click.add_argument("--threshold", type=_threshold, default=0.85)
     click.add_argument("--timeout-seconds", type=_positive_float, default=10.0)
+    click.add_argument("--match-policy", choices=("best", "unique"), default="best")
+    click.add_argument("--offset-x", type=int, default=0)
+    click.add_argument("--offset-y", type=int, default=0)
+    click.add_argument("--evidence-mode", choices=("always", "on-failure"), default="always")
     click.set_defaults(handler=_click)
 
     compile_parser = commands.add_parser("compile")

@@ -90,6 +90,24 @@ def test_loads_confirmed_cross_app_request(tmp_path: Path) -> None:
     assert request.success_assertion.stable_seconds == 1
 
 
+def test_loads_best_match_offset_and_any_success_assertion(tmp_path: Path) -> None:
+    path, value = _request(tmp_path)
+    value["steps"][0].update(  # type: ignore[index]
+        {"match_policy": "best", "click_offset": {"x": 6, "y": -3}}
+    )
+    leaf = dict(value["success_assertion"])  # type: ignore[arg-type]
+    leaf["match_policy"] = "unique"
+    value["success_assertion"] = {"kind": "group", "mode": "any", "items": [leaf]}
+    path.write_text(json.dumps(value), encoding="utf-8")
+
+    request = load_request(path)
+
+    assert request.steps[0].values["match_policy"] == "best"
+    assert request.steps[0].values["click_offset"] == {"x": 6, "y": -3}
+    assert request.success_assertion.mode == "any"
+    assert request.success_assertion.items[0].match_policy == "unique"
+
+
 def test_loads_primary_desktop_target(tmp_path: Path) -> None:
     path, value = _request(tmp_path)
     value["apps"][0] = {  # type: ignore[index]

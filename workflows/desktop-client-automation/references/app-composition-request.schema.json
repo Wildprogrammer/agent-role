@@ -48,7 +48,7 @@
         "force_terminate": {"type": "boolean"}
       }
     },
-    "assertion": {
+    "leafAssertion": {
       "type": "object",
       "additionalProperties": false,
       "required": ["app", "template"],
@@ -57,8 +57,25 @@
         "template": {"type": "string", "minLength": 1},
         "threshold": {"type": "number", "exclusiveMinimum": 0, "maximum": 1},
         "timeout_seconds": {"type": "number", "exclusiveMinimum": 0},
-        "stable_seconds": {"type": "number", "exclusiveMinimum": 0}
+        "stable_seconds": {"type": "number", "exclusiveMinimum": 0},
+        "match_policy": {"enum": ["best", "unique"], "default": "best"}
       }
+    },
+    "assertionGroup": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "mode", "items"],
+      "properties": {
+        "kind": {"const": "group"},
+        "mode": {"enum": ["any", "all"]},
+        "items": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/assertion"}}
+      }
+    },
+    "assertion": {
+      "oneOf": [
+        {"$ref": "#/$defs/leafAssertion"},
+        {"$ref": "#/$defs/assertionGroup"}
+      ]
     }
   }
 }

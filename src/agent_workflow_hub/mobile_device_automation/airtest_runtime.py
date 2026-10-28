@@ -4,8 +4,9 @@ import hashlib
 import json
 import math
 import re
+import time
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -184,6 +185,7 @@ def _eligible_matches(
     threshold: float,
     viewport: ViewportSpec,
     dependencies: Mapping[str, object],
+    match_policy: str = "unique",
 ) -> list[dict[str, object]]:
     template = dependencies["Template"](str(template_path), threshold=threshold)  # type: ignore[operator]
     raw_matches = template.match_all_in(screen)
@@ -223,9 +225,33 @@ def _eligible_matches(
         )
     if not eligible:
         raise RuntimeFailure("image_below_threshold")
-    if len(eligible) != 1:
+    eligible.sort(key=lambda item: float(item["confidence"]), reverse=True)
+    if match_policy not in {"best", "unique"}:
+        raise RuntimeFailure("invalid_match_policy")
+    if match_policy == "unique" and len(eligible) != 1:
         raise RuntimeFailure("image_not_unique")
     return eligible
+
+
+def _offset_position(
+    position: object,
+    click_offset: tuple[int, int] | None,
+    viewport: ViewportSpec,
+) -> tuple[int, int]:
+    if (
+        not isinstance(position, (tuple, list))
+        or len(position) != 2
+        or any(isinstance(value, bool) or not isinstance(value, int) for value in position)
+    ):
+        raise RuntimeFailure("image_match_invalid")
+    offset_x, offset_y = click_offset or (0, 0)
+    if any(isinstance(value, bool) or not isinstance(value, int) for value in (offset_x, offset_y)):
+        raise RuntimeFailure("invalid_click_offset")
+    x = int(position[0]) + offset_x
+    y = int(position[1]) + offset_y
+    if not 0 <= x < viewport.width or not 0 <= y < viewport.height:
+        raise RuntimeFailure("click_offset_out_of_bounds")
+    return x, y
 
 
 def capture_device(
@@ -329,6 +355,7 @@ def locate_image(
     template_path: Path,
     threshold: float,
     timeout_seconds: float,
+    match_policy: str = "unique",
     dependencies_factory: DependenciesFactory = _dependencies,
 ) -> dict[str, object]:
     template = _absolute_file(
@@ -340,16 +367,19 @@ def locate_image(
     device_object = _bind(serial, dependencies)
     screen = device_object.snapshot()
     _validate_viewport(screen, device_object, expected_viewport)
-    match = _eligible_matches(
+    matches = _eligible_matches(
         screen,
         template_path=template,
         threshold=threshold_value,
         viewport=expected_viewport,
         dependencies=dependencies,
-    )[0]
+        match_policy=match_policy,
+    )
+    match = matches[0]
     return {
         "status": "located",
-        "match_count": 1,
+        "match_count": len(matches),
+        "match_policy": match_policy,
         "position": list(match["position"]),
         "confidence": match["confidence"],
         "threshold": threshold_value,
@@ -367,6 +397,9 @@ def click_image(
     evidence_stem: str | None = None,
     threshold: float,
     timeout_seconds: float = 10.0,
+    match_policy: str = "best",
+    click_offset: tuple[int, int] | None = None,
+    evidence_mode: str = "always",
     dependencies_factory: DependenciesFactory = _dependencies,
 ) -> dict[str, object]:
     template = _absolute_file(
@@ -382,56 +415,191 @@ def click_image(
     if not evidence_dir.is_absolute():
         raise RuntimeFailure("invalid_evidence_dir")
     evidence = evidence_dir.resolve(strict=False)
-    evidence.mkdir(parents=True, exist_ok=True)
+    if evidence_mode not in {"always", "on-failure"}:
+        raise RuntimeFailure("invalid_evidence_mode")
     before_path = evidence / f"{stem}-before.png"
     pre_input_path = evidence / f"{stem}-pre-input.png"
     after_path = evidence / f"{stem}-after.png"
-    if any(path.exists() for path in (before_path, pre_input_path, after_path)):
+    if evidence_mode == "always" and any(
+        path.exists() for path in (before_path, after_path)
+    ):
         raise RuntimeFailure("output_exists")
 
     dependencies = dependencies_factory()
     device_object = _bind(serial, dependencies)
 
-    before = device_object.snapshot()
-    _validate_viewport(before, device_object, expected_viewport)
-    _eligible_matches(
-        before,
-        template_path=template,
-        threshold=threshold_value,
-        viewport=expected_viewport,
-        dependencies=dependencies,
-    )
-    _write_exclusive_image(before_path, before, dependencies)
-
     pre_input = device_object.snapshot()
-    _validate_viewport(pre_input, device_object, expected_viewport)
-    match = _eligible_matches(
-        pre_input,
-        template_path=template,
-        threshold=threshold_value,
-        viewport=expected_viewport,
-        dependencies=dependencies,
-    )[0]
-    _write_exclusive_image(pre_input_path, pre_input, dependencies)
-    position = match["position"]
-    dependencies["touch"](position, times=1)  # type: ignore[operator]
+    dispatch_started = False
+    try:
+        _validate_viewport(pre_input, device_object, expected_viewport)
+        matches = _eligible_matches(
+            pre_input,
+            template_path=template,
+            threshold=threshold_value,
+            viewport=expected_viewport,
+            dependencies=dependencies,
+            match_policy=match_policy,
+        )
+        match = matches[0]
+        position = _offset_position(match["position"], click_offset, expected_viewport)
+        if evidence_mode == "always":
+            evidence.mkdir(parents=True, exist_ok=True)
+            _write_exclusive_image(before_path, pre_input, dependencies)
+        dispatch_started = True
+        dependencies["touch"](position, times=1)  # type: ignore[operator]
+    except Exception as exc:
+        if evidence_mode == "on-failure":
+            evidence.mkdir(parents=True, exist_ok=True)
+            _write_exclusive_image(pre_input_path, pre_input, dependencies)
+        if dispatch_started:
+            raise RuntimeFailure(f"action_dispatch_unknown:{exc}") from exc
+        raise
 
-    after = device_object.snapshot()
-    _validate_viewport(after, device_object, expected_viewport)
-    _write_exclusive_image(after_path, after, dependencies)
-    return {
+    result: dict[str, object] = {
         "status": "clicked",
-        "match_count": 1,
+        "evidence_policy": evidence_mode,
+        "match_count": len(matches),
+        "match_policy": match_policy,
         "position": list(position),
         "confidence": match["confidence"],
         "threshold": threshold_value,
         "template_sha256": _sha256(template),
-        "before_path": str(before_path),
-        "before_sha256": _sha256(before_path),
-        "pre_input_path": str(pre_input_path),
-        "pre_input_sha256": _sha256(pre_input_path),
-        "after_path": str(after_path),
-        "after_sha256": _sha256(after_path),
+    }
+    if evidence_mode == "always":
+        after = device_object.snapshot()
+        _write_exclusive_image(after_path, after, dependencies)
+        result.update(
+            {
+                "before_path": str(before_path),
+                "before_sha256": _sha256(before_path),
+                "after_path": str(after_path),
+                "after_sha256": _sha256(after_path),
+            }
+        )
+    return result
+
+
+def click_image_verified(
+    *,
+    serial: str,
+    expected_viewport: ViewportSpec,
+    template_path: Path,
+    postcondition_template_path: Path,
+    evidence_dir: Path,
+    action_id: str,
+    threshold: float,
+    postcondition_threshold: float,
+    timeout_seconds: float = 10.0,
+    poll_interval_seconds: float = 0.5,
+    match_policy: str = "best",
+    postcondition_match_policy: str = "best",
+    click_offset: tuple[int, int] | None = None,
+    dependencies_factory: DependenciesFactory = _dependencies,
+    _bound_device: object | None = None,
+) -> dict[str, object]:
+    """Click one unique image and verify another, persisting screenshots only on failure."""
+    template = _absolute_file(
+        template_path, suffixes={".png", ".jpg", ".jpeg"}, code="invalid_template"
+    )
+    postcondition_template = _absolute_file(
+        postcondition_template_path,
+        suffixes={".png", ".jpg", ".jpeg"},
+        code="invalid_template",
+    )
+    threshold_value = _valid_threshold(threshold)
+    postcondition_threshold_value = _valid_threshold(postcondition_threshold)
+    timeout_value = _finite_positive(timeout_seconds, "invalid_timeout")
+    poll_interval_value = _finite_positive(poll_interval_seconds, "invalid_timeout")
+    if not ACTION_ID.fullmatch(action_id):
+        raise RuntimeFailure("invalid_action_id")
+    if not evidence_dir.is_absolute():
+        raise RuntimeFailure("invalid_evidence_dir")
+    evidence = evidence_dir.resolve(strict=False)
+    failure_pre_input_path = evidence / f"{action_id}-failure-pre-input.png"
+    failure_postcondition_path = evidence / f"{action_id}-failure-postcondition.png"
+    if failure_pre_input_path.exists() or failure_postcondition_path.exists():
+        raise RuntimeFailure("output_exists")
+
+    dependencies = dependencies_factory()
+    device_object = (
+        _bound_device if _bound_device is not None else _bind(serial, dependencies)
+    )
+    pre_input = device_object.snapshot()
+    try:
+        _validate_viewport(pre_input, device_object, expected_viewport)
+        action_matches = _eligible_matches(
+            pre_input,
+            template_path=template,
+            threshold=threshold_value,
+            viewport=expected_viewport,
+            dependencies=dependencies,
+            match_policy=match_policy,
+        )
+        action_match = action_matches[0]
+    except Exception:
+        evidence.mkdir(parents=True, exist_ok=True)
+        _write_exclusive_image(failure_pre_input_path, pre_input, dependencies)
+        raise
+
+    position = _offset_position(
+        action_match["position"], click_offset, expected_viewport
+    )
+    try:
+        dependencies["touch"](position, times=1)  # type: ignore[operator]
+    except Exception as exc:
+        evidence.mkdir(parents=True, exist_ok=True)
+        _write_exclusive_image(failure_pre_input_path, pre_input, dependencies)
+        raise RuntimeFailure(f"action_dispatch_unknown:{exc}") from exc
+    deadline = time.monotonic() + timeout_value
+    postcondition_screen: object | None = None
+    try:
+        while True:
+            postcondition_screen = device_object.snapshot()
+            _validate_viewport(postcondition_screen, device_object, expected_viewport)
+            try:
+                postcondition_matches = _eligible_matches(
+                    postcondition_screen,
+                    template_path=postcondition_template,
+                    threshold=postcondition_threshold_value,
+                    viewport=expected_viewport,
+                    dependencies=dependencies,
+                    match_policy=postcondition_match_policy,
+                )
+                postcondition_match = postcondition_matches[0]
+                break
+            except RuntimeFailure as exc:
+                remaining = deadline - time.monotonic()
+                if str(exc) != "image_below_threshold" or remaining <= 0:
+                    raise
+                time.sleep(min(poll_interval_value, remaining))
+    except Exception as exc:
+        evidence.mkdir(parents=True, exist_ok=True)
+        _write_exclusive_image(failure_pre_input_path, pre_input, dependencies)
+        if postcondition_screen is not None:
+            _write_exclusive_image(
+                failure_postcondition_path, postcondition_screen, dependencies
+            )
+        if isinstance(exc, RuntimeFailure) and str(exc) in {
+            "image_below_threshold",
+            "image_not_unique",
+        }:
+            raise RuntimeFailure(f"postcondition_failed:{exc}") from exc
+        raise
+
+    return {
+        "status": "verified",
+        "evidence_policy": "failure-only",
+        "match_count": len(action_matches),
+        "match_policy": match_policy,
+        "position": list(position),
+        "confidence": action_match["confidence"],
+        "threshold": threshold_value,
+        "template_sha256": _sha256(template),
+        "postcondition_match_count": len(postcondition_matches),
+        "postcondition_match_policy": postcondition_match_policy,
+        "postcondition_confidence": postcondition_match["confidence"],
+        "postcondition_threshold": postcondition_threshold_value,
+        "postcondition_template_sha256": _sha256(postcondition_template),
     }
 
 
@@ -443,11 +611,29 @@ def assert_image_visible(**kwargs: object) -> dict[str, object]:
 @dataclass(frozen=True)
 class AirtestRuntime:
     dependencies_factory: DependenciesFactory = _dependencies
+    _verified_bindings: dict[str, tuple[Mapping[str, object], object]] = field(
+        default_factory=dict, init=False, repr=False, compare=False
+    )
+
+    def _verified_binding(self, serial: str) -> tuple[Mapping[str, object], object]:
+        cached = self._verified_bindings.get(serial)
+        if cached is not None:
+            return cached
+        self._verified_bindings.clear()
+        dependencies = self.dependencies_factory()
+        binding = (dependencies, _bind(serial, dependencies))
+        self._verified_bindings[serial] = binding
+        return binding
 
     def inspect_viewport(self, serial: str) -> ViewportSpec:
-        return inspect_viewport(
-            serial=serial,
-            dependencies_factory=self.dependencies_factory,
+        _, device_object = self._verified_binding(serial)
+        screen = device_object.snapshot()
+        identity = _screen_identity(screen, device_object)
+        return ViewportSpec(
+            width=int(identity["width"]),
+            height=int(identity["height"]),
+            orientation=identity["orientation"],  # type: ignore[arg-type]
+            density=float(identity["density"]),
         )
 
     def capture_device(self, **kwargs: object) -> dict[str, object]:
@@ -461,6 +647,17 @@ class AirtestRuntime:
 
     def click_image(self, **kwargs: object) -> dict[str, object]:
         return click_image(**kwargs, dependencies_factory=self.dependencies_factory)  # type: ignore[arg-type]
+
+    def click_image_verified(self, **kwargs: object) -> dict[str, object]:
+        serial = kwargs.get("serial")
+        if not isinstance(serial, str):
+            raise RuntimeFailure("invalid_serial")
+        dependencies, device_object = self._verified_binding(serial)
+        return click_image_verified(  # type: ignore[arg-type]
+            **kwargs,
+            dependencies_factory=lambda: dependencies,
+            _bound_device=device_object,
+        )
 
     def assert_image_visible(self, **kwargs: object) -> dict[str, object]:
         return assert_image_visible(**kwargs, dependencies_factory=self.dependencies_factory)

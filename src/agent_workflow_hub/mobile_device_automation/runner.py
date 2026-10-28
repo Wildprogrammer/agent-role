@@ -54,6 +54,8 @@ PASSTHROUGH_FAILURES = {
     "component_precondition_failed",
     "component_recovery_failed",
     "component_postcondition_failed",
+    "postcondition_failed",
+    "action_dispatch_unknown",
 }
 NOT_VISIBLE_FAILURES = {"selector_not_found"}
 
@@ -98,6 +100,15 @@ def _canonical_assertion(value: object) -> dict[str, object] | None:
         return None
     if not isinstance(value, dict):
         raise RuntimeFailure("bundle_integrity_mismatch: invalid assertion")
+    if value.get("kind") == "group":
+        items = value.get("items")
+        if not isinstance(items, list):
+            raise RuntimeFailure("bundle_integrity_mismatch: invalid assertion group")
+        return {
+            "kind": "group",
+            "mode": value["mode"],
+            "items": [_canonical_assertion(item) for item in items],
+        }
     result: dict[str, object] = {
         "kind": value["kind"],
         "timeout_seconds": value["timeout_seconds"],
@@ -109,6 +120,7 @@ def _canonical_assertion(value: object) -> dict[str, object] | None:
             {
                 "source_sha256": value["source_sha256"],
                 "threshold": value["threshold"],
+                "match_policy": value.get("match_policy", "best"),
             }
         )
     return result
@@ -127,7 +139,14 @@ def _canonical_plan(manifest: dict[str, object]) -> dict[str, object]:
             "source_sha256": step["source_sha256"],
         }
         if step["runner"] == "airtest":
-            item.update({"action": step["action"], "threshold": step["threshold"]})
+            item.update(
+                {
+                    "action": step["action"],
+                    "threshold": step["threshold"],
+                    "match_policy": step.get("match_policy", "best"),
+                    "click_offset": step.get("click_offset"),
+                }
+            )
         component = step.get("component")
         if isinstance(component, dict):
             recovery = component.get("recovery")
@@ -183,17 +202,27 @@ def _manifest_plan_sha256(manifest: dict[str, object]) -> str:
 
 
 def _validate_assets(bundle: Path, manifest: dict[str, object]) -> None:
+    def validate_assertion(assertion: object) -> None:
+        if not isinstance(assertion, dict):
+            return
+        if assertion.get("kind") == "group":
+            for child in assertion.get("items", []):
+                validate_assertion(child)
+            return
+        if assertion.get("kind") == "image-visible":
+            asset = _resolve_asset(bundle, assertion["template"])
+            if _sha256(asset) != assertion["source_sha256"]:
+                raise RuntimeFailure(
+                    "bundle_integrity_mismatch: assertion asset hash changed"
+                )
+
     for raw in manifest["steps"]:  # type: ignore[union-attr]
         step = dict(raw)
         primary_key = "script" if step["runner"] == "agent-device" else "template"
         primary = _resolve_asset(bundle, step[primary_key])
         if _sha256(primary) != step["source_sha256"]:
             raise RuntimeFailure("bundle_integrity_mismatch: primary asset hash changed")
-        assertion = step.get("assertion")
-        if isinstance(assertion, dict) and assertion.get("kind") == "image-visible":
-            asset = _resolve_asset(bundle, assertion["template"])
-            if _sha256(asset) != assertion["source_sha256"]:
-                raise RuntimeFailure("bundle_integrity_mismatch: assertion asset hash changed")
+        validate_assertion(step.get("assertion"))
         component = step.get("component")
         if isinstance(component, dict) and isinstance(component.get("recovery"), dict):
             recovery = component["recovery"]
@@ -340,7 +369,10 @@ def _relative_evidence_paths(value: object, bundle: Path) -> list[str]:
         if not key.endswith("_path") or not isinstance(raw, str):
             continue
         try:
-            relative = Path(raw).resolve().relative_to(bundle)
+            resolved = Path(raw).resolve()
+            if not resolved.is_file():
+                continue
+            relative = resolved.relative_to(bundle)
         except (OSError, ValueError):
             continue
         paths.append(relative.as_posix())
@@ -436,6 +468,34 @@ def _execute_assertion(
 ) -> dict[str, object] | None:
     if assertion is None:
         return None
+    if assertion["kind"] == "group":
+        mode = assertion["mode"]
+        results: list[dict[str, object] | None] = []
+        errors: list[str] = []
+        for child in assertion["items"]:  # type: ignore[union-attr]
+            try:
+                results.append(
+                    _execute_assertion(
+                        child,
+                        bundle=bundle,
+                        serial=serial,
+                        session=session,
+                        state_dir=state_dir,
+                        viewport=viewport,
+                        agent_runtime=agent_runtime,
+                        airtest_runtime=airtest_runtime,
+                        parameters=parameters,
+                    )
+                )
+                if mode == "any":
+                    return {"status": "visible", "mode": "any", "matched": 1}
+            except Exception as exc:
+                errors.append(str(exc))
+                if mode == "all":
+                    raise
+        if mode == "all":
+            return {"status": "visible", "mode": "all", "matched": len(results)}
+        raise RuntimeFailure("assertion_group_failed:" + " | ".join(errors))
     if assertion["kind"] == "selector-visible":
         return agent_runtime.wait_selector(
             _materialize_selector(assertion["selector"], parameters),
@@ -451,6 +511,7 @@ def _execute_assertion(
         template_path=template,
         threshold=assertion["threshold"],
         timeout_seconds=assertion["timeout_seconds"],
+        match_policy=assertion.get("match_policy", "best"),
     )
 
 
@@ -748,20 +809,77 @@ def run_bundle(
                         "error_code"
                     ) == "replay_diverged":
                         raise RuntimeFailure("replay_diverged")
-                elif step["action"] == "click-image":
+                assertion_already_verified = False
+                if runner_name == "airtest" and step["action"] == "click-image":
                     template = _resolve_asset(root, step["template"])
                     evidence_stem = f"s{index:03d}"
-                    action_result = airtest_runtime.click_image(
-                        serial=serial,
-                        expected_viewport=expected_viewport,
-                        template_path=template,
-                        evidence_dir=evidence / "steps" / evidence_stem,
-                        action_id=step_id,
-                        evidence_stem=evidence_stem,
-                        threshold=step["threshold"],
-                        timeout_seconds=step["timeout_seconds"],
-                    )
-                else:
+                    assertion = step.get("assertion")
+                    if isinstance(assertion, dict) and assertion.get("kind") == "image-visible":
+                        failure_evidence_dir = evidence / "steps" / evidence_stem
+                        action_result = {
+                            "failure_pre_input_path": str(
+                                failure_evidence_dir
+                                / f"{step_id}-failure-pre-input.png"
+                            ),
+                            "failure_postcondition_path": str(
+                                failure_evidence_dir
+                                / f"{step_id}-failure-postcondition.png"
+                            ),
+                        }
+                        action_result = airtest_runtime.click_image_verified(
+                            serial=serial,
+                            expected_viewport=expected_viewport,
+                            template_path=template,
+                            postcondition_template_path=_resolve_asset(
+                                root, assertion["template"]
+                            ),
+                            evidence_dir=evidence / "steps" / evidence_stem,
+                            action_id=step_id,
+                            threshold=step["threshold"],
+                            match_policy=step.get("match_policy", "best"),
+                            click_offset=(
+                                None
+                                if not isinstance(step.get("click_offset"), dict)
+                                else (
+                                    step["click_offset"]["x"],
+                                    step["click_offset"]["y"],
+                                )
+                            ),
+                            postcondition_threshold=assertion["threshold"],
+                            postcondition_match_policy=assertion.get(
+                                "match_policy", "best"
+                            ),
+                            timeout_seconds=assertion["timeout_seconds"],
+                        )
+                        assertion_already_verified = True
+                    else:
+                        failure_evidence_dir = evidence / "steps" / evidence_stem
+                        action_result = {
+                            "pre_input_path": str(
+                                failure_evidence_dir / f"{evidence_stem}-pre-input.png"
+                            )
+                        }
+                        action_result = airtest_runtime.click_image(
+                            serial=serial,
+                            expected_viewport=expected_viewport,
+                            template_path=template,
+                            evidence_dir=evidence / "steps" / evidence_stem,
+                            action_id=step_id,
+                            evidence_stem=evidence_stem,
+                            threshold=step["threshold"],
+                            timeout_seconds=step["timeout_seconds"],
+                            match_policy=step.get("match_policy", "best"),
+                            click_offset=(
+                                None
+                                if not isinstance(step.get("click_offset"), dict)
+                                else (
+                                    step["click_offset"]["x"],
+                                    step["click_offset"]["y"],
+                                )
+                            ),
+                            evidence_mode="on-failure",
+                        )
+                elif runner_name == "airtest":
                     template = _resolve_asset(root, step["template"])
                     action_result = airtest_runtime.locate_image(
                         serial=serial,
@@ -769,31 +887,33 @@ def run_bundle(
                         template_path=template,
                         threshold=step["threshold"],
                         timeout_seconds=step["timeout_seconds"],
+                        match_policy=step.get("match_policy", "best"),
                     )
                 if isinstance(component, dict):
                     component_state = transition(component_state, "action-passed")
-                try:
-                    _run_assertion(
-                        step.get("assertion"),
-                        bundle=root,
-                        serial=serial,
-                        session=session,
-                        state_dir=session_state_dir,
-                        viewport=expected_viewport,
-                        agent_runtime=agent_runtime,
-                        airtest_runtime=airtest_runtime,
-                        parameters=parameters,
-                    )
-                except _PostconditionFailure as exc:
-                    if isinstance(component, dict):
-                        component_state = transition(
-                            component_state,
-                            "assertion-failed",
+                if not assertion_already_verified:
+                    try:
+                        _run_assertion(
+                            step.get("assertion"),
+                            bundle=root,
+                            serial=serial,
+                            session=session,
+                            state_dir=session_state_dir,
+                            viewport=expected_viewport,
+                            agent_runtime=agent_runtime,
+                            airtest_runtime=airtest_runtime,
+                            parameters=parameters,
                         )
-                        raise RuntimeFailure(
-                            component_state.error or "component_postcondition_failed"
-                        ) from exc
-                    raise
+                    except _PostconditionFailure as exc:
+                        if isinstance(component, dict):
+                            component_state = transition(
+                                component_state,
+                                "assertion-failed",
+                            )
+                            raise RuntimeFailure(
+                                component_state.error or "component_postcondition_failed"
+                            ) from exc
+                        raise
                 if isinstance(component, dict):
                     component_state = transition(
                         component_state,
@@ -816,6 +936,18 @@ def run_bundle(
                             if action_result is not None and key in action_result
                         },
                     }
+                postcondition_match = {
+                    key.removeprefix("postcondition_"): action_result[key]
+                    for key in (
+                        "postcondition_match_count",
+                        "postcondition_confidence",
+                        "postcondition_threshold",
+                        "postcondition_template_sha256",
+                    )
+                    if action_result is not None and key in action_result
+                }
+                if postcondition_match:
+                    record["postcondition_match"] = postcondition_match
                 if isinstance(component, dict):
                     record.update(
                         {

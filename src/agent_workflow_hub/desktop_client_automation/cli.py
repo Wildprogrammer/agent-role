@@ -264,6 +264,7 @@ def _replay(args: argparse.Namespace) -> int:
         bundle,
         parameters_path=parameters_path,
         confirmed_plan_sha256=getattr(args, "confirmed_plan_sha256", None),
+        evidence_mode=getattr(args, "evidence_mode", "on-failure"),
     )
 
 
@@ -375,6 +376,9 @@ def build_parser() -> argparse.ArgumentParser:
     replay.add_argument("--bundle", required=True)
     replay.add_argument("--parameters")
     replay.add_argument("--confirmed-plan-sha256")
+    replay.add_argument(
+        "--evidence-mode", choices=("on-failure", "always"), default="on-failure"
+    )
     replay.set_defaults(handler=_replay)
     return parser
 

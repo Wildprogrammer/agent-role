@@ -12,6 +12,7 @@ from agent_workflow_hub.mobile_device_automation.airtest_runtime import (
     RuntimeFailure,
     capture_device,
     click_image,
+    click_image_verified,
     crop_template,
     inspect_viewport,
     locate_image,
@@ -26,7 +27,9 @@ class FakeTemplate:
         self.threshold = threshold
 
     def match_all_in(self, screen):
-        return list(self.runtime.matches)
+        return list(
+            self.runtime.matches_by_template.get(Path(self.path).name, self.runtime.matches)
+        )
 
 
 class FakeAirtest:
@@ -37,6 +40,8 @@ class FakeAirtest:
         self.init_calls: list[tuple[str, str, dict[str, object]]] = []
         self.current_calls: list[int] = []
         self.matches = [{"result": (120, 240), "confidence": 0.91}]
+        self.matches_by_template: dict[str, list[dict[str, object]]] = {}
+        self.touch_error: RuntimeFailure | None = None
         self.viewport_after: tuple[int, int, int] | None = None
         self.density_after: float | None = None
         self.current_shape = (viewport.height, viewport.width, 3)
@@ -76,6 +81,8 @@ class FakeAirtest:
     def touch(self, position, *, times: int) -> None:
         assert times == 1
         self.touches.append(tuple(position))
+        if self.touch_error is not None:
+            raise self.touch_error
 
     def imwrite(self, path: str, image) -> None:
         Path(path).write_bytes(b"PNG" + image.tobytes())
@@ -111,7 +118,7 @@ def template(tmp_path: Path) -> Path:
     return path.resolve()
 
 
-def test_click_uses_fresh_snapshot_and_unique_match(
+def test_click_uses_one_pre_input_snapshot_and_optional_success_evidence(
     fake_airtest: FakeAirtest, viewport: ViewportSpec, tmp_path: Path
 ) -> None:
     result = click_image(
@@ -123,12 +130,11 @@ def test_click_uses_fresh_snapshot_and_unique_match(
         threshold=0.85,
         dependencies_factory=fake_airtest.dependencies,
     )
-    assert fake_airtest.snapshot_calls == 3
+    assert fake_airtest.snapshot_calls == 2
     assert fake_airtest.touches == [(120, 240)]
     assert result["status"] == "clicked"
     assert result["match_count"] == 1
     assert Path(result["before_path"]).name == "open-settings-before.png"
-    assert Path(result["pre_input_path"]).name == "open-settings-pre-input.png"
     assert Path(result["after_path"]).name == "open-settings-after.png"
     assert result["before_sha256"] == hashlib.sha256(
         Path(result["before_path"]).read_bytes()
@@ -165,11 +171,148 @@ def test_click_can_use_compact_evidence_filenames(
     )
 
     assert Path(result["before_path"]).name == "s002-before.png"
-    assert Path(result["pre_input_path"]).name == "s002-pre-input.png"
     assert Path(result["after_path"]).name == "s002-after.png"
 
 
-def test_click_refuses_multiple_matches(
+def test_verified_click_uses_two_fresh_snapshots_without_success_images(
+    fake_airtest: FakeAirtest, viewport: ViewportSpec, tmp_path: Path
+) -> None:
+    action_template = template(tmp_path)
+    postcondition_template = (tmp_path / "done.png").resolve()
+    postcondition_template.write_bytes(b"postcondition")
+    evidence = (tmp_path / "evidence").resolve()
+
+    result = click_image_verified(
+        serial="emulator-5554",
+        expected_viewport=viewport,
+        template_path=action_template,
+        postcondition_template_path=postcondition_template,
+        evidence_dir=evidence,
+        action_id="open-settings",
+        threshold=0.85,
+        postcondition_threshold=0.85,
+        timeout_seconds=1,
+        dependencies_factory=fake_airtest.dependencies,
+    )
+
+    assert fake_airtest.snapshot_calls == 2
+    assert fake_airtest.touches == [(120, 240)]
+    assert result["status"] == "verified"
+    assert result["evidence_policy"] == "failure-only"
+    assert result["postcondition_confidence"] == 0.91
+    assert not evidence.exists()
+
+
+def test_verified_click_saves_diagnostics_only_when_postcondition_fails(
+    fake_airtest: FakeAirtest, viewport: ViewportSpec, tmp_path: Path
+) -> None:
+    action_template = template(tmp_path)
+    postcondition_template = (tmp_path / "done.png").resolve()
+    postcondition_template.write_bytes(b"postcondition")
+    fake_airtest.matches_by_template["done.png"] = []
+    evidence = (tmp_path / "evidence").resolve()
+
+    with pytest.raises(RuntimeFailure, match="image_below_threshold"):
+        click_image_verified(
+            serial="emulator-5554",
+            expected_viewport=viewport,
+            template_path=action_template,
+            postcondition_template_path=postcondition_template,
+            evidence_dir=evidence,
+            action_id="open-settings",
+            threshold=0.85,
+            postcondition_threshold=0.85,
+            timeout_seconds=0.01,
+            poll_interval_seconds=0.001,
+            dependencies_factory=fake_airtest.dependencies,
+        )
+
+    assert fake_airtest.touches == [(120, 240)]
+    assert (evidence / "open-settings-failure-pre-input.png").is_file()
+    assert (evidence / "open-settings-failure-postcondition.png").is_file()
+
+
+def test_runtime_reuses_one_binding_across_verified_steps(
+    fake_airtest: FakeAirtest, viewport: ViewportSpec, tmp_path: Path
+) -> None:
+    action_template = template(tmp_path)
+    postcondition_template = (tmp_path / "done.png").resolve()
+    postcondition_template.write_bytes(b"postcondition")
+    runtime = AirtestRuntime(dependencies_factory=fake_airtest.dependencies)
+
+    for action_id in ("first-step", "second-step"):
+        runtime.click_image_verified(
+            serial="emulator-5554",
+            expected_viewport=viewport,
+            template_path=action_template,
+            postcondition_template_path=postcondition_template,
+            evidence_dir=(tmp_path / action_id).resolve(),
+            action_id=action_id,
+            threshold=0.85,
+            postcondition_threshold=0.85,
+            timeout_seconds=1,
+        )
+
+    assert len(fake_airtest.init_calls) == 1
+    assert fake_airtest.current_calls == [0]
+    assert fake_airtest.snapshot_calls == 4
+    assert fake_airtest.touches == [(120, 240), (120, 240)]
+
+
+def test_verified_click_saves_pre_input_when_touch_dispatch_is_unknown(
+    fake_airtest: FakeAirtest, viewport: ViewportSpec, tmp_path: Path
+) -> None:
+    action_template = template(tmp_path)
+    postcondition_template = (tmp_path / "done.png").resolve()
+    postcondition_template.write_bytes(b"postcondition")
+    fake_airtest.touch_error = RuntimeFailure("adb_touch_failed")
+    evidence = (tmp_path / "evidence").resolve()
+
+    with pytest.raises(RuntimeFailure, match="action_dispatch_unknown"):
+        click_image_verified(
+            serial="emulator-5554",
+            expected_viewport=viewport,
+            template_path=action_template,
+            postcondition_template_path=postcondition_template,
+            evidence_dir=evidence,
+            action_id="open-settings",
+            threshold=0.85,
+            postcondition_threshold=0.85,
+            timeout_seconds=1,
+            dependencies_factory=fake_airtest.dependencies,
+        )
+
+    assert (evidence / "open-settings-failure-pre-input.png").is_file()
+    assert not (evidence / "open-settings-failure-postcondition.png").exists()
+
+
+def test_runtime_reuses_viewport_binding_for_first_verified_step(
+    fake_airtest: FakeAirtest, viewport: ViewportSpec, tmp_path: Path
+) -> None:
+    action_template = template(tmp_path)
+    postcondition_template = (tmp_path / "done.png").resolve()
+    postcondition_template.write_bytes(b"postcondition")
+    runtime = AirtestRuntime(dependencies_factory=fake_airtest.dependencies)
+
+    assert runtime.inspect_viewport("emulator-5554") == viewport
+    runtime.click_image_verified(
+        serial="emulator-5554",
+        expected_viewport=viewport,
+        template_path=action_template,
+        postcondition_template_path=postcondition_template,
+        evidence_dir=(tmp_path / "evidence").resolve(),
+        action_id="open-settings",
+        threshold=0.85,
+        postcondition_threshold=0.85,
+        timeout_seconds=1,
+    )
+
+    assert len(fake_airtest.init_calls) == 1
+    assert fake_airtest.current_calls == [0]
+    assert fake_airtest.snapshot_calls == 3
+
+
+def test_click_unique_policy_refuses_multiple_matches(
     fake_airtest: FakeAirtest, viewport: ViewportSpec, tmp_path: Path
 ) -> None:
     fake_airtest.matches = [
@@ -184,43 +327,86 @@ def test_click_refuses_multiple_matches(
             evidence_dir=(tmp_path / "evidence").resolve(),
             action_id="open-settings",
             threshold=0.85,
+            match_policy="unique",
             dependencies_factory=fake_airtest.dependencies,
         )
     assert fake_airtest.touches == []
 
 
-def test_click_refuses_viewport_change_before_input(
+def test_success_evidence_capture_does_not_overturn_dispatched_action_on_viewport_change(
     fake_airtest: FakeAirtest, viewport: ViewportSpec, tmp_path: Path
 ) -> None:
     fake_airtest.viewport_after = (viewport.width, viewport.height, 3)
-    with pytest.raises(RuntimeFailure, match="viewport_changed"):
-        click_image(
-            serial="emulator-5554",
-            expected_viewport=viewport,
-            template_path=template(tmp_path),
-            evidence_dir=(tmp_path / "evidence").resolve(),
-            action_id="open-settings",
-            threshold=0.85,
-            dependencies_factory=fake_airtest.dependencies,
-        )
-    assert fake_airtest.touches == []
+    result = click_image(
+        serial="emulator-5554",
+        expected_viewport=viewport,
+        template_path=template(tmp_path),
+        evidence_dir=(tmp_path / "evidence").resolve(),
+        action_id="open-settings",
+        threshold=0.85,
+        dependencies_factory=fake_airtest.dependencies,
+    )
+    assert result["status"] == "clicked"
+    assert fake_airtest.touches == [(120, 240)]
 
 
-def test_click_refuses_density_change_before_input(
+def test_click_on_failure_mode_uses_single_snapshot_and_writes_no_success_images(
     fake_airtest: FakeAirtest, viewport: ViewportSpec, tmp_path: Path
 ) -> None:
-    fake_airtest.density_after = 3.0
-    with pytest.raises(RuntimeFailure, match="viewport_changed"):
-        click_image(
-            serial="emulator-5554",
-            expected_viewport=viewport,
-            template_path=template(tmp_path),
-            evidence_dir=(tmp_path / "evidence").resolve(),
-            action_id="open-settings",
-            threshold=0.85,
-            dependencies_factory=fake_airtest.dependencies,
-        )
-    assert fake_airtest.touches == []
+    evidence = (tmp_path / "evidence").resolve()
+    result = click_image(
+        serial="emulator-5554",
+        expected_viewport=viewport,
+        template_path=template(tmp_path),
+        evidence_dir=evidence,
+        action_id="open-settings",
+        threshold=0.85,
+        evidence_mode="on-failure",
+        dependencies_factory=fake_airtest.dependencies,
+    )
+    assert result["status"] == "clicked"
+    assert fake_airtest.snapshot_calls == 1
+    assert not evidence.exists()
+
+
+def test_click_best_policy_uses_highest_confidence_match(
+    fake_airtest: FakeAirtest, viewport: ViewportSpec, tmp_path: Path
+) -> None:
+    fake_airtest.matches = [
+        {"result": (10, 10), "confidence": 0.90},
+        {"result": (40, 40), "confidence": 0.95},
+    ]
+    result = click_image(
+        serial="emulator-5554",
+        expected_viewport=viewport,
+        template_path=template(tmp_path),
+        evidence_dir=(tmp_path / "evidence").resolve(),
+        action_id="open-settings",
+        threshold=0.85,
+        evidence_mode="on-failure",
+        dependencies_factory=fake_airtest.dependencies,
+    )
+    assert result["match_count"] == 2
+    assert result["position"] == [40, 40]
+    assert fake_airtest.touches == [(40, 40)]
+
+
+def test_click_offset_is_applied_to_fresh_match(
+    fake_airtest: FakeAirtest, viewport: ViewportSpec, tmp_path: Path
+) -> None:
+    result = click_image(
+        serial="emulator-5554",
+        expected_viewport=viewport,
+        template_path=template(tmp_path),
+        evidence_dir=(tmp_path / "evidence").resolve(),
+        action_id="open-settings",
+        threshold=0.85,
+        click_offset=(7, -9),
+        evidence_mode="on-failure",
+        dependencies_factory=fake_airtest.dependencies,
+    )
+    assert result["position"] == [127, 231]
+    assert fake_airtest.touches == [(127, 231)]
 
 
 @pytest.mark.parametrize(

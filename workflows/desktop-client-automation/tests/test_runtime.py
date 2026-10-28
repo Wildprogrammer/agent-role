@@ -888,7 +888,7 @@ def test_primary_local_coordinate_rejects_display_outside_virtual_desktop() -> N
         ("right-click-image", {"right_click": True}),
     ],
 )
-def test_desktop_image_click_uses_fresh_unique_match(
+def test_desktop_image_click_uses_fresh_best_match(
     monkeypatch: pytest.MonkeyPatch,
     action: str,
     touch_kwargs: dict[str, object],
@@ -897,7 +897,7 @@ def test_desktop_image_click_uses_fresh_unique_match(
     monkeypatch.setattr(airtest_runtime, "_require_desktop_foreground", lambda _: None)
     monkeypatch.setattr(
         airtest_runtime,
-        "_wait_for_unique_desktop_match",
+        "_wait_for_desktop_match",
         lambda *args, **kwargs: (410, 220),
     )
 
@@ -916,6 +916,35 @@ def test_desktop_image_click_uses_fresh_unique_match(
     )
 
     assert ("touch", (410, 220), touch_kwargs) in events
+
+
+def test_desktop_image_click_applies_relative_offset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[object] = []
+    monkeypatch.setattr(airtest_runtime, "_require_desktop_foreground", lambda _: None)
+    monkeypatch.setattr(
+        airtest_runtime,
+        "_wait_for_desktop_match",
+        lambda *args, **kwargs: (410, 220),
+    )
+
+    airtest_runtime._run_step(
+        {
+            "app": "desktop",
+            "action": "click-image",
+            "template": "assets/icon.png",
+            "threshold": 0.8,
+            "timeout_seconds": 1,
+            "click_offset": {"x": 9, "y": -5},
+        },
+        Path(),
+        {},
+        {"desktop": 0},
+        _desktop_step_dependencies(events),
+    )
+
+    assert ("touch", (419, 215), {"times": 1}) in events
 
 
 def test_desktop_drag_uses_fresh_matches_and_airtest_swipe(
@@ -947,7 +976,7 @@ def test_desktop_drag_uses_fresh_matches_and_airtest_swipe(
     assert ("swipe", (100, 200), (300, 400)) in events
 
 
-def test_desktop_final_assertion_uses_unique_primary_display_match(
+def test_desktop_final_assertion_uses_configured_primary_display_match(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[object] = []
@@ -957,7 +986,7 @@ def test_desktop_final_assertion_uses_unique_primary_display_match(
     monkeypatch.setattr(
         airtest_runtime,
         "_desktop_match_once",
-        lambda deps, target: calls.append(target) or (500, 300),
+        lambda deps, target, policy: calls.append((target, policy)) or (500, 300),
     )
     dependencies = _desktop_step_dependencies([])
     dependencies["exists"] = lambda target: (_ for _ in ()).throw(
@@ -977,7 +1006,7 @@ def test_desktop_final_assertion_uses_unique_primary_display_match(
         dependencies,
     )
 
-    assert calls == [(str(Path() / "assets/window.png"), 0.8)]
+    assert calls == [((str(Path() / "assets/window.png"), 0.8), "best")]
 
 
 def test_activate_switches_airtest_device_and_focuses_bound_window() -> None:
@@ -1058,7 +1087,7 @@ def test_run_bundle_saves_success_evidence(
         airtest_runtime, "_assert_success", lambda assertion, bundle, indexes, deps: None
     )
 
-    assert airtest_runtime.run_bundle(bundle) == 0
+    assert airtest_runtime.run_bundle(bundle, evidence_mode="always") == 0
     evidence = bundle / "replay-success.png"
     result = json.loads((bundle / "run-result.json").read_text(encoding="utf-8"))
     saved_manifest = json.loads((bundle / "manifest.json").read_text(encoding="utf-8"))

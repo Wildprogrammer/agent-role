@@ -33,11 +33,11 @@ VIEWPORT = ViewportSpec(width=1080, height=2400, orientation="portrait", density
 
 def test_selector_parameters_are_materialized_with_escaped_values() -> None:
     assert _materialize_selector(
-        'id="search" label="${QUERY}"', {"query": '示例"套餐'}
-    ) == 'id="search" label="示例\\"套餐"'
+        'id="search" label="${QUERY}"', {"query": '炸鸡"套餐'}
+    ) == 'id="search" label="炸鸡\\"套餐"'
     assert _materialize_selector(
-        "id=search label=${QUERY}", {"query": "示例 套餐"}
-    ) == 'id=search label="示例 套餐"'
+        "id=search label=${QUERY}", {"query": "炸鸡 套餐"}
+    ) == 'id=search label="炸鸡 套餐"'
 
 
 def _make_bundle(
@@ -45,6 +45,7 @@ def _make_bundle(
     *,
     destructive: bool = False,
     script_body: str | None = None,
+    image_assertion: bool = True,
 ) -> Path:
     script = tmp_path / "open-settings.ad"
     command = "clear-data com.example.settings" if destructive else "open com.example.settings"
@@ -96,12 +97,20 @@ def _make_bundle(
                 "action": "click-image",
                 "template": str(icon.resolve()),
                 "threshold": 0.85,
-                "assertion": {
-                    "kind": "image-visible",
-                    "template": str(result.resolve()),
-                    "threshold": 0.85,
-                    "timeout_seconds": 10,
-                },
+                "assertion": (
+                    {
+                        "kind": "image-visible",
+                        "template": str(result.resolve()),
+                        "threshold": 0.85,
+                        "timeout_seconds": 10,
+                    }
+                    if image_assertion
+                    else {
+                        "kind": "selector-visible",
+                        "selector": "id=result-marker",
+                        "timeout_seconds": 10,
+                    }
+                ),
             },
         ],
         "decision": "generate-and-replay",
@@ -281,6 +290,7 @@ class FakeAirtest:
         self.assertion_error: RuntimeFailure | None = None
         self.failure_file: Path | None = None
         self.click_calls: list[dict[str, object]] = []
+        self.verified_click_calls: list[dict[str, object]] = []
 
     def click_image(self, *, action_id, evidence_dir, **kwargs):
         self.click_calls.append(
@@ -303,6 +313,33 @@ class FakeAirtest:
             "confidence": 0.91,
             "before_path": str(before),
             "after_path": str(after),
+        }
+
+    def click_image_verified(self, *, action_id, evidence_dir, **kwargs):
+        self.verified_click_calls.append(
+            {"action_id": action_id, "evidence_dir": evidence_dir, **kwargs}
+        )
+        if self.action_error:
+            evidence_dir.mkdir(parents=True, exist_ok=True)
+            self.failure_file = evidence_dir / f"{action_id}-failure-pre-input.png"
+            self.failure_file.write_bytes(b"failure-pre-input")
+            raise self.action_error
+        self.events.append((len(self.events) + 1, "airtest", action_id))
+        if self.assertion_error:
+            evidence_dir.mkdir(parents=True, exist_ok=True)
+            (evidence_dir / f"{action_id}-failure-pre-input.png").write_bytes(
+                b"failure-pre-input"
+            )
+            (evidence_dir / f"{action_id}-failure-postcondition.png").write_bytes(
+                b"failure-postcondition"
+            )
+            raise RuntimeFailure(f"postcondition_failed:{self.assertion_error}")
+        return {
+            "status": "verified",
+            "position": [120, 240],
+            "confidence": 0.91,
+            "postcondition_confidence": 0.92,
+            "evidence_policy": "failure-only",
         }
 
     def locate_image(self, **kwargs):
@@ -530,10 +567,37 @@ def test_runner_uses_compact_airtest_evidence_paths(bundle: Path, runtime_fakes)
         airtest_runtime=fake_airtest,
     ) == 0
 
-    call = fake_airtest.click_calls[0]
+    call = fake_airtest.verified_click_calls[0]
     assert call["action_id"] == "tap-settings-icon"
-    assert call.get("evidence_stem") == "s002"
     assert Path(call["evidence_dir"]).name == "s002"
+    assert not Path(call["evidence_dir"]).exists()
+    records = [
+        json.loads(line)
+        for line in (bundle / "evidence/tool-results.jsonl").read_text("utf-8").splitlines()
+    ]
+    assert records[-1]["postcondition_match"] == {
+        "confidence": 0.92,
+    }
+
+
+def test_click_image_with_selector_assertion_keeps_legacy_path(
+    tmp_path: Path, runtime_fakes
+) -> None:
+    bundle = _make_bundle(tmp_path, image_assertion=False)
+    fake_agent, fake_airtest, _ = runtime_fakes
+    parameter_file = bundle / "parameters.yaml"
+    parameter_file.write_text("password: runtime-only\n", encoding="utf-8")
+
+    assert run_bundle(
+        bundle,
+        parameters_path=parameter_file.resolve(),
+        agent_runtime=fake_agent,
+        airtest_runtime=fake_airtest,
+    ) == 0
+
+    assert len(fake_airtest.click_calls) == 1
+    assert fake_airtest.verified_click_calls == []
+    assert "id=result-marker" in fake_agent.waits
 
 
 def test_runner_inspects_viewport_when_device_inventory_omits_it(
@@ -805,9 +869,16 @@ def test_failure_screenshot_is_retained(bundle: Path, runtime_fakes) -> None:
         == 2
     )
     assert fake_airtest.failure_file is not None
-    assert fake_airtest.failure_file.read_bytes() == b"failure"
+    assert fake_airtest.failure_file.read_bytes() == b"failure-pre-input"
     assert read_result(bundle)["error_code"] == "image_not_unique"
     assert manifest(bundle)["status"] == "replay-failed"
+    records = [
+        json.loads(line)
+        for line in (bundle / "evidence/tool-results.jsonl").read_text("utf-8").splitlines()
+    ]
+    assert records[-1]["evidence_paths"] == [
+        "evidence/steps/s002/tap-settings-icon-failure-pre-input.png"
+    ]
 
 
 def test_manifest_target_mutation_invalidates_plan_digest(

@@ -15,7 +15,7 @@ metadata:
   capability-slots: '{"image-replay":["python.airtest"]}'
   config-templates: '{}'
   config-requirements: '{}'
-  entrypoints: '{"doctor":"python <HUB_ROOT>/workflows/mobile-device-automation/scripts/mobile_device_automation.py doctor --mode <MODE> [--serial <SERIAL>]","devices":"python <HUB_ROOT>/workflows/mobile-device-automation/scripts/mobile_device_automation.py devices [--serial <SERIAL>]","capture":"python <HUB_ROOT>/workflows/mobile-device-automation/scripts/mobile_device_automation.py capture --serial <SERIAL> --output <ABSOLUTE_PNG> [--x <X> --y <Y> --width <WIDTH> --height <HEIGHT>]","locate-image":"python <HUB_ROOT>/workflows/mobile-device-automation/scripts/mobile_device_automation.py locate-image --serial <SERIAL> --template <ABSOLUTE_IMAGE> [--threshold 0.85 --timeout-seconds 10]","click-image":"python <HUB_ROOT>/workflows/mobile-device-automation/scripts/mobile_device_automation.py click-image --serial <SERIAL> --template <ABSOLUTE_IMAGE> --evidence-dir <ABSOLUTE_DIRECTORY> --action-id <ID> [--threshold 0.85 --timeout-seconds 10]","compile":"python <HUB_ROOT>/workflows/mobile-device-automation/scripts/mobile_device_automation.py compile --request <ABSOLUTE_JSON> --output-root <ABSOLUTE_DIRECTORY>","compose":"python <HUB_ROOT>/workflows/mobile-device-automation/scripts/mobile_device_automation.py compose --request <ABSOLUTE_COMPOSITION_REQUEST_JSON> --output-root <ABSOLUTE_DIRECTORY>","preview":"python <HUB_ROOT>/workflows/mobile-device-automation/scripts/mobile_device_automation.py preview --bundle <ABSOLUTE_BUNDLE_DIRECTORY>","replay":"python <HUB_ROOT>/workflows/mobile-device-automation/scripts/mobile_device_automation.py replay --bundle <ABSOLUTE_BUNDLE_DIRECTORY> [--parameters <ABSOLUTE_YAML>] [--confirmed-plan-sha256 <SHA256>]"}'
+  entrypoints: '{"doctor":"python <HUB_ROOT>/workflows/mobile-device-automation/scripts/mobile_device_automation.py doctor --mode <MODE> [--serial <SERIAL>]","devices":"python <HUB_ROOT>/workflows/mobile-device-automation/scripts/mobile_device_automation.py devices [--serial <SERIAL>]","capture":"python <HUB_ROOT>/workflows/mobile-device-automation/scripts/mobile_device_automation.py capture --serial <SERIAL> --output <ABSOLUTE_PNG> [--x <X> --y <Y> --width <WIDTH> --height <HEIGHT>]","locate-image":"python <HUB_ROOT>/workflows/mobile-device-automation/scripts/mobile_device_automation.py locate-image --serial <SERIAL> --template <ABSOLUTE_IMAGE> [--threshold 0.85 --timeout-seconds 10 --match-policy unique]","click-image":"python <HUB_ROOT>/workflows/mobile-device-automation/scripts/mobile_device_automation.py click-image --serial <SERIAL> --template <ABSOLUTE_IMAGE> --evidence-dir <ABSOLUTE_DIRECTORY> --action-id <ID> [--threshold 0.85 --timeout-seconds 10 --match-policy best --offset-x 0 --offset-y 0 --evidence-mode always]","compile":"python <HUB_ROOT>/workflows/mobile-device-automation/scripts/mobile_device_automation.py compile --request <ABSOLUTE_JSON> --output-root <ABSOLUTE_DIRECTORY>","compose":"python <HUB_ROOT>/workflows/mobile-device-automation/scripts/mobile_device_automation.py compose --request <ABSOLUTE_COMPOSITION_REQUEST_JSON> --output-root <ABSOLUTE_DIRECTORY>","preview":"python <HUB_ROOT>/workflows/mobile-device-automation/scripts/mobile_device_automation.py preview --bundle <ABSOLUTE_BUNDLE_DIRECTORY>","replay":"python <HUB_ROOT>/workflows/mobile-device-automation/scripts/mobile_device_automation.py replay --bundle <ABSOLUTE_BUNDLE_DIRECTORY> [--parameters <ABSOLUTE_YAML>] [--confirmed-plan-sha256 <SHA256>]"}'
   supported-hosts: '["codex","openclaw","claude-code","hermes","opencode"]'
 ---
 
@@ -42,7 +42,7 @@ metadata:
 
 动态探索输入为用户任务、目标 Android 设备范围、目标应用或系统界面，以及允许的外部影响。执行前用 `devices` 枚举目标；请求指定 serial 时精确绑定，未指定且有多个同等在线目标时返回 `ambiguous_device`，不得猜选。设备身份同时包括 transport、宽高、方向和 density；动作前身份变化返回 `target_identity_changed` 或 `viewport_changed`。
 
-固化输入是符合 `references/automation-request.schema.json` 的绝对路径 JSON。它只接受已清理并由用户确认的有效路径，包含 Android 目标、唯一 serial、USB/无线/模拟器 transport、viewport、参数、按顺序执行的步骤、后置断言和固化决策。语义步骤引用绝对 `.ad` 文件；图片步骤引用绝对 PNG/JPEG。敏感参数只能在运行时提供，不得在 bundle 中保存默认明文。
+固化输入是符合 `references/automation-request.schema.json` 的绝对路径 JSON。它只接受已清理并由用户确认的有效路径，包含 Android 目标、唯一 serial、USB/无线/模拟器 transport、viewport、参数、按顺序执行的步骤、必要的结果断言和固化决策。普通 `none|read|idempotent` 图片导航可省略逐步断言；`create|submit|send|delete` 图片动作必须保留结果断言。断言可以是单项，也可以用 `kind=group` 配置 `mode=any|all`。语义步骤引用绝对 `.ad` 文件；图片步骤引用绝对 PNG/JPEG。敏感参数只能在运行时提供，不得在 bundle 中保存默认明文。
 
 工作流参数继续使用 schema 中的可读小写名称；执行 agent-device 时，Hub 在隔离 state-dir 内把脚本占位符确定性转换为上游要求的全大写环境变量，并用安全转义后的实际值解析 selector 断言。转换后重名（例如 `foo-bar` 与 `foo_bar`）或落入保留的 `AD_*` 命名空间必须在设备输入前拒绝，不能把小写 `-e` 参数直接传给 agent-device。
 
@@ -60,7 +60,7 @@ metadata:
 
 每次编译创建新版本，不覆盖已有目录。bundle 包含 `workflow.yaml`、`metadata.json`、`parameters.example.yaml`、`flows/*.ad`、`images/*` 和 `assertions/*`。所有执行资产复制进 bundle 并记录 SHA-256；清单只保存相对路径。初始状态为 `generated-unverified`，独立回放通过后为 `replay-verified`，失败为 `replay-failed`。没有真实回放证据不得宣称已验证。
 
-运行证据使用新的 evidence 目录，至少记录脱敏后的步骤结果、动作前后截图、模板哈希、匹配分数和合格匹配数量、设备 transport、耗时和最终状态。最终结果不得保存参数值、无线地址或未裁剪的上游敏感输出。
+运行证据使用新的 evidence 目录，至少记录脱敏后的步骤结果、模板哈希、匹配分数和合格匹配数量、设备 transport、耗时和最终状态。独立 `click-image` 作者验收默认保留动作前后截图；自动回放默认 `on-failure`，成功时只记录结构化结果，不落盘截图，失败时才保存点击前或最后一次结果诊断图。截图用于模板制作、验收和故障定位，不得成为每个普通动作的固定落盘步骤。最终结果不得保存参数值、无线地址或未裁剪的上游敏感输出。
 
 ## 依赖和运行前检查
 
@@ -93,8 +93,8 @@ Helper 缺失、版本不符或无法验证时，普通文本输入可静默采�
 3. 宿主拥有 agent-device MCP 时可以直接调用上游 MCP 完成动态探索；否则使用已声明 CLI/.ad 能力。Hub 不代理通用 MCP 工具，也不在 Python 中复制 generic tap/type/swipe API。
 4. 路径成功后去掉误点、回退、重复等待和探索坐标，只保留有效 `.ad` 语义片段及明确断言。
 5. 控件路径不足时，用 `capture` 从同一设备的新鲜截图裁剪不敏感模板。模板记录截图哈希、裁剪框、viewport、方向、density、阈值和说明。
-6. 先 `locate-image`。每次匹配读取新鲜设备画面并要求恰好一个候选达到阈值；低于阈值、不唯一、超出视口或 viewport 改变时停止。
-7. 需要真实图片动作时执行 `click-image`。它保存 before，重新定位唯一中心，向同一 serial 点击一次，再保存 after 并由 selector、前台包名或独立图片断言验证。图片失败不得静默回退坐标。
+6. 先 `locate-image` 制作和校验模板；作者验收默认使用 `match_policy=unique`。运行时图片动作默认使用 `match_policy=best`，从所有过阈值候选中点击最高分候选；只有目标必须唯一时才显式改为 `unique`。低于阈值、超出视口或 viewport 改变时停止。
+7. 需要真实图片动作时执行 `click-image`。独立 CLI 验收可保存 before/after；自动回放直接使用 Airtest 新鲜画面定位并点击，默认成功不写截图。匹配锚点与实际可点击位置不重合时可声明 `click_offset`，不得保存或复用首次运行的绝对坐标。普通导航以动作返回为本步结果；关键结果再用单项、`any` 或 `all` 断言验证。图片失败不得静默回退坐标。
 8. 单次专用流程可把已确认步骤写成请求，用 `compile` 生成递增 bundle。同一应用的重复流程优先把公共状态转换写入私有 catalog，按 doctor 返回的 `direct-ime` 或 `pinyin-fallback` 选择文本实现，再用 `compose` 在编译期展开。连续语义动作仍由 agent-device 原生 `.ad` 承载；Airtest 图片步骤保持独立 runner，不伪装成 `.ad`。
 9. 用 `preview` 校验资产哈希，查看顺序、effects、破坏性步骤和 `plan_sha256`。存在破坏性步骤时完成计划绑定授权。
 10. 在 fresh session 中运行 `replay`。runner 先验证清单、资产、参数、设备和 viewport，再严格按 manifest 顺序调用 agent-device 与 Airtest；第一处分歧即停止。
@@ -122,7 +122,7 @@ Helper 缺失、版本不符或无法验证时，普通文本输入可静默采�
 - `target_identity_changed|viewport_changed`：停止，重新观察和生成模板；不得缩放旧坐标。
 - `selector_not_found|selector_ambiguous`：获取新快照，优先改进语义 selector；不要直接降级图片或坐标。
 - `test_ime_required`：在输入发生前停止；若 doctor 为 `direct-ime`，在对应会话的 `open` 中加入 `--test-ime`，若为 `pinyin-fallback`，重新生成“拼音输入 → 唯一中文候选 → 最终中文验证”的脚本。
-- `image_below_threshold|image_not_unique`：保存只读证据并停止；图片失败不得静默回退。
+- `image_below_threshold|image_not_unique`：保存只读证据并停止；`image_not_unique` 只会在显式 `match_policy=unique` 时出现，图片失败不得静默回退。
 - `postcondition_failed|replay_diverged`：结果未知时只对账，不重做具有 create/submit/send/delete effect 的步骤。
 - `component_precondition_failed`：恢复不存在或执行一次后仍未到达组件入口；停止并重新探索状态转换边界。
 - `component_recovery_failed|component_postcondition_failed`：保留组件分支证据并停止，不循环恢复或重放主要动作。
@@ -145,7 +145,7 @@ doctor、devices、capture、locate-image 和 preview 可在环境不变时重�
 
 - doctor 正确报告 Node、agent-device、IME Helper、`text_input_mode`、Airtest profile 和 lock 状态；devices 唯一绑定目标或稳定返回 `ambiguous_device`。
 - 一个无害 selector 流程在 Android 真机或模拟器上成功，动作后状态经过新快照验证。
-- 一个 Airtest 图片流程使用设备新鲜截图、唯一匹配、阈值和前后证据，不点击主机模拟器窗口。
+- 一个 Airtest 图片流程使用设备新鲜画面和阈值，不点击主机模拟器窗口；普通动作默认选择最高分匹配，关键锚点可显式要求唯一。独立 CLI 作者验收可产生前后证据，自动回放成功只产生结构化证据、失败时产生诊断截图。
 - 混合 bundle 中 `.ad`、模板和断言均为相对路径且哈希有效；修改资产会在设备输入前失败。
 - 破坏性流程没有精确 `plan_sha256` 时不产生输入，计划变化会使旧授权失效。
 - 独立 fresh session 回放完成并产生 `replay-verified`；图片失败没有坐标兜底。

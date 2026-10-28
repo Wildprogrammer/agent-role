@@ -14,6 +14,7 @@ class DesktopAssertionSpec:
     threshold: float
     timeout_seconds: float
     stable_seconds: float
+    match_policy: Literal["best", "unique"] = "best"
 
 
 @dataclass(frozen=True)

@@ -16,12 +16,12 @@
    若验收包含中文或其它非 ASCII 输入，先核对 doctor 的 `text_input_mode`。`direct-ime` 使用 `open --test-ime` 后直接 `fill` 中文；`pinyin-fallback` 使用 ASCII 拼音输入，按可访问文本唯一点击目标中文候选或应用内建议，再以新快照验证输入框值或业务结果等于目标中文。后者可静默执行，但候选缺失、不唯一或结果不一致时必须失败。安装 Helper 遇到 `INSTALL_FAILED_USER_RESTRICTED` 时由用户在真机上确认，不得重复轰炸安装请求或绕过厂商安全限制。
 3. 发送 Android Home，确认返回无敏感信息的测试桌面。不要依赖或点击主机上的模拟器窗口。
 4. 用 `capture` 从当前 Android serial 保存一张新鲜截图，并裁剪一个非敏感、稳定且有辨识度的应用图标。保存源截图哈希、裁剪框、viewport、方向、density 和阈值。
-5. 先执行 `locate-image`，要求只有一个匹配达到阈值。随后明确强制执行一次 Airtest `click-image`；它必须重新截图定位、保存 before/after，并仍然向同一 Android serial 注入触摸。
-6. 用新的 agent-device selector、前台包名或独立图片断言验证 Airtest 动作结果。图片未找到或不唯一时停止，禁止回退到坐标。
+5. 先执行 `locate-image --match-policy unique` 完成模板作者验收。随后明确强制执行一次 Airtest `click-image`；它必须从新鲜画面重新定位，并仍然向同一 Android serial 注入触摸。作者验收可用 `--evidence-mode always` 保存 before/after。
+6. 用新的 agent-device selector、前台包名或独立图片断言验证 Airtest 动作结果。回放中的普通图片动作默认选择过阈值候选中的最高分位置；关键目标显式配置 `unique`。图片未找到或显式唯一断言不满足时停止，禁止回退到坐标。
 7. 将已成功的 selector `.ad` 片段与 Airtest 图片步骤写入请求，执行 `compile` 生成新 bundle。
 8. 执行 `preview`，核对 serial 绑定、transport、viewport、步骤顺序、effects、资产哈希和 `plan_sha256`。本验收不得包含破坏性步骤。
 9. 关闭当前执行会话，建立 fresh session，再执行 `replay`。不得复用探索阶段的元素引用、截图坐标或匹配结果。
-10. 核验 `run-result.json` 为 `replay-verified`，证据包含两个 runner 的步骤顺序、动作前后截图、模板哈希、匹配分数、唯一候选数、设备 transport 和脱敏工具结果。
+10. 核验 `run-result.json` 为 `replay-verified`，证据包含两个 runner 的步骤顺序、模板哈希、匹配分数、候选数、设备 transport 和脱敏工具结果。成功回放不要求逐步截图；失败时应有对应诊断截图。
 11. 关闭会话，确认没有遗留 agent-device/Airtest 进程或设备农场租约。私有截图、日志、serial 和路径只保留在忽略的 workspace/outputs 中；验证记录只写脱敏摘要。
     若使用过 `--test-ime`，同时核验系统默认输入法已经恢复为执行前记录的值；若使用拼音降级，证据必须包含拼音输入、唯一中文候选和最终中文结果三个状态。
 

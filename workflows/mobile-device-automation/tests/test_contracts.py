@@ -331,7 +331,7 @@ def test_rejects_invalid_serial(request_dict, write_request, serial: str) -> Non
         load_request(write_request(request_dict))
 
 
-@pytest.mark.parametrize("serial", ["device-1", "192.0.2.10", "host:70000"])
+@pytest.mark.parametrize("serial", ["device-1", "192.168.1.20", "host:70000"])
 def test_wireless_transport_requires_host_and_valid_port(
     request_dict, write_request, serial: str
 ) -> None:
@@ -368,10 +368,54 @@ def test_rejects_duplicate_parameter_names(request_dict, write_request) -> None:
         load_request(write_request(request_dict))
 
 
-def test_click_image_requires_postcondition(request_dict, write_request) -> None:
+def test_safe_click_image_may_omit_postcondition(request_dict, write_request) -> None:
     del request_dict["steps"][1]["assertion"]
-    with pytest.raises(ContractError, match="click-image.*assertion"):
+    request = load_request(write_request(request_dict))
+    assert request.steps[1].assertion is None
+
+
+def test_side_effecting_click_image_requires_postcondition(
+    request_dict, write_request
+) -> None:
+    del request_dict["steps"][1]["assertion"]
+    request_dict["steps"][1]["effect"] = "submit"
+    with pytest.raises(ContractError, match="side-effecting click-image.*assertion"):
         load_request(write_request(request_dict))
+
+
+def test_image_step_supports_best_match_offset_and_group_assertion(
+    request_dict, write_request, source_assets
+) -> None:
+    request_dict["steps"][1].update(
+        {
+            "match_policy": "best",
+            "click_offset": {"x": 8, "y": -4},
+            "assertion": {
+                "kind": "group",
+                "mode": "any",
+                "items": [
+                    {
+                        "kind": "image-visible",
+                        "template": str(source_assets["result"].resolve()),
+                        "threshold": 0.8,
+                        "timeout_seconds": 2,
+                        "match_policy": "unique",
+                    },
+                    {
+                        "kind": "selector-visible",
+                        "selector": "text=Done",
+                        "timeout_seconds": 2,
+                    },
+                ],
+            },
+        }
+    )
+    step = load_request(write_request(request_dict)).steps[1]
+    assert step.match_policy == "best"
+    assert step.click_offset == (8, -4)
+    assert step.assertion is not None
+    assert step.assertion.mode == "any"
+    assert step.assertion.items[0].match_policy == "unique"
 
 
 def test_rejects_unknown_effect(request_dict, write_request) -> None:
@@ -444,7 +488,7 @@ def test_load_manifest_accepts_relative_assets_and_rejects_unknown_fields(
         load_manifest(path.resolve())
 
 
-def test_authoring_schema_validates_request_and_requires_click_assertion(
+def test_authoring_schema_requires_side_effecting_click_assertion(
     request_dict,
 ) -> None:
     schema = json.loads(
@@ -456,6 +500,8 @@ def test_authoring_schema_validates_request_and_requires_click_assertion(
     assert list(validator.iter_errors(request_dict)) == []
 
     del request_dict["steps"][1]["assertion"]
+    assert list(validator.iter_errors(request_dict)) == []
+    request_dict["steps"][1]["effect"] = "submit"
     assert list(validator.iter_errors(request_dict))
 
 

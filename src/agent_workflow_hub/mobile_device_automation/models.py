@@ -35,11 +35,14 @@ class ParameterSpec:
 
 @dataclass(frozen=True)
 class AssertionSpec:
-    kind: Literal["selector-visible", "image-visible"]
+    kind: Literal["selector-visible", "image-visible", "group"]
     selector: str | None
     template: Path | None
     threshold: float | None
     timeout_seconds: float
+    match_policy: Literal["best", "unique"] | None = None
+    mode: Literal["any", "all"] | None = None
+    items: tuple["AssertionSpec", ...] = ()
 
 
 @dataclass(frozen=True)
@@ -74,6 +77,8 @@ class StepSpec:
     template: Path | None
     threshold: float | None
     assertion: AssertionSpec | None
+    match_policy: Literal["best", "unique"] | None = None
+    click_offset: tuple[int, int] | None = None
     component: ComponentLifecycleSpec | None = None
 
 

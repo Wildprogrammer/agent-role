@@ -539,20 +539,42 @@ def _primary_local_to_virtual(
 
 
 def _desktop_match_once(
-    deps: dict[str, Any], target: Any,
+    deps: dict[str, Any], target: Any, match_policy: str = "unique",
 ) -> tuple[int, int] | None:
     current = deps["device"]()
     screen = current.snapshot()
     primary, offset_x, offset_y = _primary_display_crop(current, screen)
     matches = target.match_all_in(primary) or []
-    if len(matches) > 1:
+    if match_policy not in {"best", "unique"}:
+        raise RuntimeFailure("invalid-match-policy")
+    if match_policy == "unique" and len(matches) > 1:
         raise RuntimeFailure(
             f"ambiguous-match: desktop template matched {len(matches)} locations"
         )
     if not matches:
         return None
-    x, y = matches[0]["result"]
+    best = max(matches, key=lambda item: float(item.get("confidence", 0)))
+    x, y = best["result"]
     return int(x) + offset_x, int(y) + offset_y
+
+
+def _wait_for_desktop_match(
+    deps: dict[str, Any],
+    target: Any,
+    timeout: float,
+    match_policy: str = "best",
+    *,
+    clock: Any = time.monotonic,
+    sleeper: Any = time.sleep,
+) -> tuple[int, int]:
+    deadline = clock() + timeout
+    while True:
+        position = _desktop_match_once(deps, target, match_policy)
+        if position is not None:
+            return position
+        if clock() >= deadline:
+            raise deps["TargetNotFoundError"]("desktop template was not found")
+        sleeper(0.25)
 
 
 def _wait_for_unique_desktop_match(
@@ -563,14 +585,66 @@ def _wait_for_unique_desktop_match(
     clock: Any = time.monotonic,
     sleeper: Any = time.sleep,
 ) -> tuple[int, int]:
-    deadline = clock() + timeout
+    return _wait_for_desktop_match(
+        deps,
+        target,
+        timeout,
+        "unique",
+        clock=clock,
+        sleeper=sleeper,
+    )
+
+
+def _window_match_once(
+    deps: dict[str, Any], target: Any, match_policy: str
+) -> tuple[int, int] | None:
+    if match_policy == "best":
+        found = deps["exists"](target)
+        if not found:
+            return None
+        if isinstance(found, (tuple, list)) and len(found) == 2:
+            return int(found[0]), int(found[1])
+        return 0, 0
+    if match_policy != "unique":
+        raise RuntimeFailure("invalid-match-policy")
+    screen = deps["device"]().snapshot()
+    matches = target.match_all_in(screen) or []
+    if len(matches) > 1:
+        raise RuntimeFailure(
+            f"ambiguous-match: window template matched {len(matches)} locations"
+        )
+    if not matches:
+        return None
+    x, y = matches[0]["result"]
+    return int(x), int(y)
+
+
+def _wait_for_window_match(
+    deps: dict[str, Any], target: Any, timeout: float, match_policy: str
+) -> tuple[int, int]:
+    if match_policy == "best":
+        return tuple(deps["wait"](target, timeout=timeout))
+    deadline = time.monotonic() + timeout
     while True:
-        position = _desktop_match_once(deps, target)
+        position = _window_match_once(deps, target, match_policy)
         if position is not None:
             return position
-        if clock() >= deadline:
-            raise deps["TargetNotFoundError"]("desktop template was not found")
-        sleeper(0.25)
+        if time.monotonic() >= deadline:
+            raise deps["TargetNotFoundError"]("window template was not found")
+        time.sleep(0.25)
+
+
+def _apply_click_offset(
+    position: tuple[int, int], step: dict[str, Any]
+) -> tuple[int, int]:
+    raw = step.get("click_offset")
+    if raw is None:
+        return position
+    x = int(position[0]) + int(raw["x"])
+    y = int(position[1]) + int(raw["y"])
+    if x < 0 or y < 0:
+        raise RuntimeFailure("click-offset-out-of-bounds")
+    return x, y
 
 
 def _activate(deps: dict[str, Any], indexes: dict[str, int], alias: str) -> None:
@@ -609,12 +683,18 @@ def _run_step(
     if action in {"click-image", "double-click-image", "right-click-image", "wait-image"}:
         target = _template(deps, bundle, step)
         is_desktop = step["app"] in deps.get("desktop_aliases", set())
+        match_policy = step.get("match_policy", "best")
         if is_desktop:
-            position = _wait_for_unique_desktop_match(deps, target, timeout)
+            position = _wait_for_desktop_match(
+                deps, target, timeout, match_policy
+            )
         else:
-            position = deps["wait"](target, timeout=timeout)
+            position = _wait_for_window_match(
+                deps, target, timeout, match_policy
+            )
         if action == "wait-image":
             return
+        position = _apply_click_offset(position, step)
         if action == "right-click-image":
             if is_desktop:
                 deps["touch"](position, right_click=True)
@@ -693,15 +773,25 @@ def _probe_component_assertion(
     indexes: dict[str, int],
     deps: dict[str, Any],
 ) -> bool:
+    if assertion.get("kind") == "group" or assertion.get("mode") in {"any", "all"}:
+        results = [
+            _probe_component_assertion(child, bundle, indexes, deps)
+            for child in assertion["items"]
+        ]
+        return any(results) if assertion["mode"] == "any" else all(results)
     _activate(deps, indexes, assertion["app"])
     target = _template(deps, bundle, assertion)
     is_desktop = assertion["app"] in deps.get("desktop_aliases", set())
 
     def visible() -> bool:
         match = (
-            _desktop_match_once(deps, target)
+            _desktop_match_once(
+                deps, target, assertion.get("match_policy", "best")
+            )
             if is_desktop
-            else deps["exists"](target)
+            else _window_match_once(
+                deps, target, assertion.get("match_policy", "best")
+            )
         )
         return bool(match)
 
@@ -887,6 +977,24 @@ def _run_steps(
 def _assert_success(
     assertion: dict[str, Any], bundle: Path, indexes: dict[str, int], deps: dict[str, Any]
 ) -> None:
+    if assertion.get("kind") == "group" or assertion.get("mode") in {"any", "all"}:
+        mode = assertion["mode"]
+        failures: list[str] = []
+        for child in assertion["items"]:
+            try:
+                _assert_success(child, bundle, indexes, deps)
+                if mode == "any":
+                    return
+            except RuntimeFailure as exc:
+                failures.append(str(exc))
+                if mode == "all":
+                    raise
+        if mode == "all":
+            return
+        raise RuntimeFailure(
+            "none of the user-confirmed final assertions passed: "
+            + " | ".join(failures)
+        )
     _activate(deps, indexes, assertion["app"])
     target = _template(deps, bundle, assertion)
     deadline = time.monotonic() + float(assertion["timeout_seconds"])
@@ -894,9 +1002,13 @@ def _assert_success(
     is_desktop = assertion["app"] in deps.get("desktop_aliases", set())
     while time.monotonic() < deadline:
         found = (
-            _desktop_match_once(deps, target)
+            _desktop_match_once(
+                deps, target, assertion.get("match_policy", "best")
+            )
             if is_desktop
-            else deps["exists"](target)
+            else _window_match_once(
+                deps, target, assertion.get("match_policy", "best")
+            )
         )
         if found:
             stable_since = stable_since or time.monotonic()
@@ -913,8 +1025,11 @@ def run_bundle(
     *,
     parameters_path: Path | None = None,
     confirmed_plan_sha256: str | None = None,
+    evidence_mode: str = "on-failure",
 ) -> int:
     bundle = bundle.resolve()
+    if evidence_mode not in {"on-failure", "always"}:
+        raise RuntimeFailure("invalid-evidence-mode")
     manifest = _read_json(bundle / "manifest.json", "manifest")
     deps: dict[str, Any] = {}
     components: list[dict[str, Any]] = []
@@ -934,14 +1049,16 @@ def run_bundle(
                 _run_steps(manifest, bundle, parameters, indexes, deps) or []
             )
             _assert_success(manifest["success_assertion"], bundle, indexes, deps)
-        evidence = bundle / "replay-success.png"
-        deps["snapshot"](filename=str(evidence))
+        evidence = None
+        if evidence_mode == "always":
+            evidence = bundle / "replay-success.png"
+            deps["snapshot"](filename=str(evidence))
         result = {
             "status": "replay-verified",
             "started_at": started,
             "finished_at": time.time(),
             "aggregate_effect": manifest["aggregate_effect"],
-            "evidence": str(evidence),
+            "evidence": str(evidence) if evidence else None,
             "components": components,
         }
         exit_code = 0

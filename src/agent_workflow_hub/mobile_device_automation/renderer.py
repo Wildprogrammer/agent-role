@@ -69,9 +69,26 @@ def _render_assertion(
     index: int,
     bundle: Path,
     assets: list[dict[str, str]],
+    label_suffix: str = "",
 ) -> dict[str, object] | None:
     if assertion is None:
         return None
+    if assertion.kind == "group":
+        return {
+            "kind": "group",
+            "mode": assertion.mode,
+            "items": [
+                _render_assertion(
+                    child,
+                    step=step,
+                    index=index,
+                    bundle=bundle,
+                    assets=assets,
+                    label_suffix=f"{label_suffix}-g{child_index:03d}",
+                )
+                for child_index, child in enumerate(assertion.items, start=1)
+            ],
+        }
     if assertion.kind == "selector-visible":
         return {
             "kind": assertion.kind,
@@ -81,7 +98,10 @@ def _render_assertion(
     if assertion.template is None or assertion.threshold is None:
         raise ContractError(f"step {step.id} has an incomplete image assertion")
     stem = _slug_stem(assertion.template, f"{step.id}-assertion")
-    relative = Path("assertions") / f"{index:03d}-{stem}{assertion.template.suffix.casefold()}"
+    relative = (
+        Path("assertions")
+        / f"{index:03d}{label_suffix}-{stem}{assertion.template.suffix.casefold()}"
+    )
     copied_path, digest = _copy_asset(assertion.template, bundle, relative, assets)
     return {
         "kind": assertion.kind,
@@ -89,6 +109,7 @@ def _render_assertion(
         "source_sha256": digest,
         "threshold": assertion.threshold,
         "timeout_seconds": assertion.timeout_seconds,
+        "match_policy": assertion.match_policy,
     }
 
 
@@ -172,8 +193,14 @@ def _render_step(
                 "template": copied_path,
                 "source_sha256": digest,
                 "threshold": step.threshold,
+                "match_policy": step.match_policy,
             }
         )
+        if step.click_offset is not None:
+            item["click_offset"] = {
+                "x": step.click_offset[0],
+                "y": step.click_offset[1],
+            }
     item["assertion"] = _render_assertion(
         step.assertion,
         step=step,

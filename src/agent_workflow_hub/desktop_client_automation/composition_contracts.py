@@ -70,6 +70,7 @@ ASSERTION_FIELDS = {
     "threshold",
     "timeout_seconds",
     "stable_seconds",
+    "match_policy",
 }
 SCENARIO_FIELDS = {
     "schema_version",
@@ -166,6 +167,13 @@ def _threshold(value: Any, label: str, default: float = 0.8) -> float:
     return float(number)
 
 
+def _match_policy(value: Any, label: str) -> str:
+    policy = "best" if value is None else value
+    if policy not in {"best", "unique"}:
+        raise _invalid(f"{label} must be best or unique")
+    return str(policy)
+
+
 def _load_yaml(path: Path, label: str) -> tuple[Path, dict[str, Any], bytes]:
     try:
         source = path.resolve(strict=True)
@@ -226,6 +234,9 @@ def _desktop_assertion(
         ),
         stable_seconds=_positive_number(
             item.get("stable_seconds"), f"{label}.stable_seconds", 0.5
+        ),
+        match_policy=_match_policy(
+            item.get("match_policy"), f"{label}.match_policy"
         ),
     )
 

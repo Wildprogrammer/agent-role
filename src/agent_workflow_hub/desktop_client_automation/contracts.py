@@ -41,10 +41,12 @@ PARAMETER_FIELDS = {"name", "kind", "default", "sensitive"}
 STEP_FIELDS = {
     "id", "app", "action", "effect", "optional", "retries", "timeout_seconds",
     "template", "threshold", "x", "y", "text", "key", "keys", "direction",
-    "amount", "from_template", "to_template", "description",
+    "amount", "from_template", "to_template", "description", "match_policy",
+    "click_offset",
 }
 ASSERTION_FIELDS = {
     "app", "template", "threshold", "timeout_seconds", "stable_seconds",
+    "match_policy", "kind", "mode", "items",
 }
 IDENTIFIER = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
 PLACEHOLDER = re.compile(r"\$\{([a-z][a-z0-9_-]{0,63})\}")
@@ -88,6 +90,28 @@ def _threshold(value: Any, label: str, default: float = 0.8) -> float:
     if isinstance(number, bool) or not isinstance(number, (int, float)) or not 0 < number <= 1:
         raise ContractError(f"{label} must be greater than zero and at most one")
     return float(number)
+
+
+def _match_policy(value: Any, label: str) -> str:
+    policy = "best" if value is None else value
+    if policy not in {"best", "unique"}:
+        raise ContractError(f"{label} must be best or unique")
+    return str(policy)
+
+
+def _click_offset(value: Any, label: str) -> dict[str, int] | None:
+    if value is None:
+        return None
+    item = _object(value, label)
+    _closed(item, {"x", "y"}, label)
+    if set(item) != {"x", "y"}:
+        raise ContractError(f"{label} must contain x and y")
+    if any(
+        isinstance(item[key], bool) or not isinstance(item[key], int)
+        for key in ("x", "y")
+    ):
+        raise ContractError(f"{label} x and y must be integers")
+    return {"x": int(item["x"]), "y": int(item["y"])}
 
 
 def _existing_image(value: Any, label: str) -> Path:
@@ -250,6 +274,17 @@ def _step(
     if action in IMAGE_ACTIONS:
         values["template"] = str(_existing_image(item.get("template"), f"step {step_id} template"))
         values["threshold"] = _threshold(item.get("threshold"), f"step {step_id} threshold")
+        values["match_policy"] = _match_policy(
+            item.get("match_policy"), f"step {step_id} match_policy"
+        )
+        if action != "wait-image":
+            offset = _click_offset(
+                item.get("click_offset"), f"step {step_id} click_offset"
+            )
+            if offset is not None:
+                values["click_offset"] = offset
+        elif "click_offset" in item:
+            raise ContractError(f"step {step_id} wait-image must omit click_offset")
     elif action == "click-coordinate":
         for axis in ("x", "y"):
             coordinate = item.get(axis)
@@ -290,6 +325,10 @@ def _step(
         values["to_template"] = str(_existing_image(item.get("to_template"), f"step {step_id} to_template"))
     elif action == "manual-step":
         _text(item.get("description"), f"step {step_id} description")
+    if action not in IMAGE_ACTIONS and {"match_policy", "click_offset"} & set(item):
+        raise ContractError(
+            f"step {step_id} match_policy and click_offset require an image action"
+        )
     optional = item.get("optional", False)
     if not isinstance(optional, bool):
         raise ContractError(f"step {step_id} optional must be boolean")
@@ -312,6 +351,39 @@ def _assertion(
 ) -> AssertionSpec:
     item = _object(value, label)
     _closed(item, ASSERTION_FIELDS, label)
+    if item.get("kind") == "group" or "mode" in item or "items" in item:
+        forbidden = {
+            "app",
+            "template",
+            "threshold",
+            "timeout_seconds",
+            "stable_seconds",
+            "match_policy",
+        } & set(item)
+        if forbidden:
+            raise ContractError(f"{label} group has incompatible fields")
+        mode = item.get("mode")
+        if item.get("kind") != "group":
+            raise ContractError(f"{label}.kind must equal group")
+        if mode not in {"any", "all"}:
+            raise ContractError(f"{label}.mode must be any or all")
+        raw_items = item.get("items")
+        if not isinstance(raw_items, list) or not raw_items:
+            raise ContractError(f"{label}.items must be a non-empty list")
+        return AssertionSpec(
+            app=None,
+            template=None,
+            threshold=None,
+            timeout_seconds=0,
+            stable_seconds=0,
+            mode=mode,
+            items=tuple(
+                _assertion(child, apps, f"{label}.items[{index}]")
+                for index, child in enumerate(raw_items)
+            ),
+        )
+    if "kind" in item:
+        raise ContractError(f"{label}.kind is only valid for assertion groups")
     app = _identifier(item.get("app"), f"{label}.app")
     if app not in apps:
         raise ContractError(f"{label} references an unknown app")
@@ -324,6 +396,9 @@ def _assertion(
         ),
         stable_seconds=_positive_number(
             item.get("stable_seconds"), f"{label}.stable_seconds", 1
+        ),
+        match_policy=_match_policy(
+            item.get("match_policy"), f"{label}.match_policy"
         ),
     )
 
