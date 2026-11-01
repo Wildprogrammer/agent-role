@@ -76,6 +76,7 @@ The rows below are catalogued workflows. Dynamic validation determines their cur
 | `ssh-operations` | Catalogued workflow. Connect to configured Windows, macOS, or Linux SSH targets to run commands and related steps, manage files through SFTP/SCP, traverse jump hosts, and open explicit port forwarding with TOFU host-key protection and one confirmation only for high-impact operations. |
 | `desktop-client-automation` | Catalogued workflow. Use Cua Driver MCP for cross-host Windows/macOS desktop exploration, preserve Codex native Computer Use as a compatibility path, and compose exact-version Windows Airtest components through the shared composition semantics while keeping desktop images and application bindings platform-local. |
 | `mobile-device-automation` | Catalogued workflow. Explore Android physical devices and emulators through agent-device, then compose exact-version semantic and conditional Airtest components through the shared composition semantics while keeping Android selectors, scripts, images, and device evidence platform-local. |
+| `agent-session-gateway` | Catalogued workflow. Bind Lingxi/Xiaozhi, XiaoAi, and future bounded channels to one explicit Hermes or DeepSeek Harness session without copying or merging host history; provide confirmation, deduplication, attachments, optional device controls, and a pinned Xiaozhi server adapter. |
 
 ## Prepare / bootstrap
 

@@ -1,0 +1,34 @@
+{
+  "schema_version": "1.0",
+  "trusted_caller_id": "xiaozhi-backend",
+  "default_profile": "default",
+  "profiles": [
+    {
+      "name": "default",
+      "api_server_base_url": "http://127.0.0.1:9119/p/default",
+      "api_key_env": "HERMES_DEFAULT_API_KEY"
+    },
+    {
+      "name": "specialist",
+      "api_server_base_url": "http://[::1]:9119/p/specialist",
+      "api_key_env": "HERMES_SPECIALIST_API_KEY"
+    }
+  ],
+  "deepseek_harness": {
+    "base_url": "http://127.0.0.1:8765",
+    "launch_token_env": "XIAOZHI_DSH_LAUNCH_TOKEN",
+    "dsh_home": "C:\\Users\\YOUR_NAME\\.dsh",
+    "expected_version": "0.2.0-rc.2",
+    "allowed_presets": [
+      "standard",
+      "assistant-agent"
+    ]
+  },
+  "dispatch_enabled": false,
+  "require_confirmation": true,
+  "bound_voice_dispatch_mode": "confirm",
+  "request_timeout_seconds": 30,
+  "poll_interval_seconds": 2,
+  "max_polls": 30,
+  "max_input_chars": 4000
+}

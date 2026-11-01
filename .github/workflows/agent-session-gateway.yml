@@ -1,0 +1,71 @@
+name: Agent Session Gateway
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/agent-session-gateway.yml"
+      - "pyproject.toml"
+      - "SKILL.md"
+      - "src/agent_workflow_hub/xiaozhi_hermes_bridge/**"
+      - "workflows/agent-session-gateway/**"
+  push:
+    branches: [master]
+    paths:
+      - ".github/workflows/agent-session-gateway.yml"
+      - "pyproject.toml"
+      - "SKILL.md"
+      - "src/agent_workflow_hub/xiaozhi_hermes_bridge/**"
+      - "workflows/agent-session-gateway/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  gateway:
+    name: Gateway / Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - name: Install Hub and test dependencies
+        run: python -m pip install --upgrade pip && python -m pip install -e ".[dev]"
+      - name: Run Gateway tests
+        run: python -m pytest workflows/agent-session-gateway/tests -q
+      - name: Validate Hub contracts
+        run: workflow-hub validate "${{ github.workspace }}"
+      - name: Parse managed PowerShell launcher
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path "workflows/agent-session-gateway/scripts/start_xiaozhi_server.ps1"),
+            [ref]$tokens,
+            [ref]$errors
+          ) | Out-Null
+          if ($errors.Count -gt 0) {
+            $errors | ForEach-Object { Write-Error $_.ToString() }
+            exit 1
+          }
+
+  server-python-boundary:
+    name: Server adapter / Python 3.10 syntax
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Compile the files copied into xiaozhi-esp32-server
+        run: |
+          python -m py_compile \
+            workflows/agent-session-gateway/adapters/xiaozhi_server_plugin.py \
+            workflows/agent-session-gateway/adapters/ollama_nonstream_tools_llm.py

@@ -1,0 +1,104 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-workflow-hub.local/schemas/agent-session-gateway-config.json",
+  "title": "Xiaozhi Hermes bridge configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "trusted_caller_id",
+    "default_profile",
+    "profiles",
+    "dispatch_enabled",
+    "require_confirmation",
+    "request_timeout_seconds",
+    "poll_interval_seconds",
+    "max_polls",
+    "max_input_chars"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "trusted_caller_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+    },
+    "default_profile": {"$ref": "#/$defs/profileName"},
+    "profiles": {
+      "type": "array",
+      "minItems": 1,
+      "$comment": "Profile-name uniqueness and default_profile membership are semantic checks enforced by the Python parser.",
+      "items": {"$ref": "#/$defs/profileRoute"}
+    },
+    "dispatch_enabled": {"type": "boolean"},
+    "require_confirmation": {
+      "type": "boolean",
+      "description": "Controls only the legacy unbound Runs API dispatch operation. Shared desktop/manual dispatches and lifecycle operations have independent mandatory confirmation rules."
+    },
+    "bound_voice_dispatch_mode": {
+      "enum": ["confirm", "direct"],
+      "default": "confirm",
+      "description": "Independent policy for the private bound-device voice operation. direct permits dispatch_bound_voice without per-message confirmation; omission remains confirm/fail-closed."
+    },
+    "request_timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 120},
+    "poll_interval_seconds": {"type": "integer", "minimum": 1, "maximum": 30},
+    "max_polls": {"type": "integer", "minimum": 1, "maximum": 120},
+    "max_input_chars": {"type": "integer", "minimum": 1, "maximum": 20000},
+    "deepseek_harness": {"$ref": "#/$defs/deepseekHarness"}
+  },
+  "$defs": {
+    "profileName": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$"
+    },
+    "profileRoute": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "api_server_base_url", "api_key_env"],
+      "properties": {
+        "name": {"$ref": "#/$defs/profileName"},
+        "api_server_base_url": {
+          "type": "string",
+          "$comment": "The parser additionally enforces the numeric port range 1..65535 and exact name/path equality.",
+          "pattern": "^http://(127\\.0\\.0\\.1|\\[::1\\])(:[0-9]{1,5})?/p/[a-z0-9][a-z0-9._-]{0,63}$"
+        },
+        "api_key_env": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}$"
+        }
+      }
+    },
+    "deepseekHarness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "base_url",
+        "launch_token_env",
+        "dsh_home",
+        "expected_version",
+        "allowed_presets"
+      ],
+      "properties": {
+        "base_url": {
+          "type": "string",
+          "pattern": "^http://(127\\.0\\.0\\.1|\\[::1\\])(:[0-9]{1,5})?/?$"
+        },
+        "launch_token_env": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}$"
+        },
+        "dsh_home": {
+          "type": "string",
+          "minLength": 3,
+          "$comment": "The Python parser additionally requires an absolute host path."
+        },
+        "expected_version": {"const": "0.2.0-rc.2"},
+        "allowed_presets": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/profileName"}
+        }
+      }
+    }
+  }
+}

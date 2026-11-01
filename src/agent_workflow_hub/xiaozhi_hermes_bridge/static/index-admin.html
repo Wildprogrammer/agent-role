@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>灵溪控制台</title>
+  <link rel="stylesheet" href="/static/style.css?v=1">
+</head>
+<body>
+  <div class="login" id="login">
+    <form class="login-card" id="login-form">
+      <div class="brand"><span class="brand-mark"></span><div><h1>灵溪控制台</h1><p class="muted">仅限本机访问</p></div></div>
+      <label>管理密码<input id="login-password" type="password" autocomplete="current-password" maxlength="256" required></label>
+      <button class="primary" type="submit">进入控制台</button>
+      <p class="notice" id="login-notice">默认密码启用时建议尽快通过服务环境变量修改。</p>
+    </form>
+  </div>
+  <main class="shell">
+    <header class="topbar"><div class="brand"><span class="brand-mark"></span><div><h1>灵溪控制台</h1><p class="muted">设备、智能体与运行配置</p></div></div><span class="badge" id="runtime-status">检查中</span></header>
+    <section class="grid">
+      <article class="card">
+        <h2>设备与绑定</h2>
+        <div class="form-grid">
+          <label>在线设备<select id="device"></select></label>
+          <label>宿主<select id="host"><option value="hermes">Hermes</option><option value="deepseek-harness">DeepSeek Harness</option></select></label>
+          <label>智能体<select id="agent"></select></label>
+          <label>会话<select id="session"></select></label>
+        </div>
+        <div class="actions"><button id="load-sessions">查询会话</button><button class="primary" id="bind">绑定所选会话</button><button class="danger" id="unbind">解绑</button></div>
+        <p class="notice" id="binding-notice">正在读取实时状态……</p>
+      </article>
+      <article class="card">
+        <h2>运行状态</h2>
+        <div class="stack">
+          <div class="row"><span class="muted">配置状态</span><strong id="config-state">—</strong></div>
+          <div class="row"><span class="muted">已加载 LLM</span><strong id="loaded-llm">—</strong></div>
+          <div class="row"><span class="muted">磁盘配置 LLM</span><strong id="configured-llm">—</strong></div>
+          <div class="row"><span class="muted">TTS 音色</span><strong id="configured-voice">—</strong></div>
+          <div class="row"><span class="muted">设备观测</span><strong id="observed-state">未发布</strong></div>
+          <div class="row"><span class="muted">连接代次</span><strong id="connection-generation">—</strong></div>
+          <div class="row"><span class="muted">设备音量</span><strong id="device-volume">—</strong></div>
+          <div class="row"><span class="muted">网络信号</span><strong id="network-signal">—</strong></div>
+        </div>
+      </article>
+      <article class="card wide">
+        <h2>设备能力中心</h2>
+        <div class="capability-grid" id="capability-list"></div>
+        <div class="actions"><button id="diagnostics">读取音频诊断</button></div>
+        <p class="notice" id="diagnostics-notice">诊断只返回电平、采样率和队列类指标，不上传或保存原始音频。</p>
+      </article>
+      <article class="card wide">
+        <h2>更新与恢复安全门</h2>
+        <div class="stack">
+          <div class="row"><span class="muted">远程执行</span><strong id="maintenance-state">硬禁用</strong></div>
+          <div class="row"><span class="muted">物理操作限定</span><strong id="physical-only">清 Wi-Fi / 清 NVS / 恢复出厂</strong></div>
+        </div>
+        <p class="notice" id="maintenance-notice">签名 OTA、资源双槽、认证配网和设备 ACK 未同时通过前，只提供清单校验与预检，不允许写 Flash、重启或清除凭据。</p>
+      </article>
+      <article class="card wide">
+        <h2>配置事务</h2>
+        <div class="form-grid">
+          <label>基础模型<select id="llm-mode"><option value="bound_agent">当前绑定智能体</option><option value="remote">DeepSeek API</option><option value="local">本地 LLM</option></select></label>
+          <label>TTS 服务<select id="tts-provider"></select></label>
+          <label>TTS 音色<input id="tts-voice" maxlength="128"></label>
+          <label>停顿判定（毫秒）<input id="vad-silence" type="number" min="200" max="3000"></label>
+          <label>工具超时（秒）<input id="tool-timeout" type="number" min="30" max="900"></label>
+          <label>回滚备份 ID<input id="backup-id" placeholder="20261023T...yaml"></label>
+        </div>
+        <div class="actions"><button id="preview">预览差异</button><button class="primary" id="apply" disabled>写入配置</button><button id="rollback">回滚备份</button><button id="refresh">刷新</button></div>
+        <p class="notice" id="config-notice">修改会先生成预览，不会自动重启服务。</p>
+      </article>
+    </section>
+  </main>
+  <script src="/static/common.js?v=2"></script>
+  <script src="/static/admin.js?v=2"></script>
+</body>
+</html>

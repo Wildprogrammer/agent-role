@@ -7,19 +7,24 @@ name = "agent-workflow-hub"
 version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
+  "cryptography>=44,<47",
   "httpx>=0.28,<1",
   "mcp==1.27.2",
   "PyYAML>=6.0,<7",
   "packaging>=24,<27",
   "PyMySQL>=1.2,<2",
   "sqlglot>=30.14,<31",
+  "websockets>=14,<17",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0,<9", "Pillow==12.3.0"]
+dev = ["pytest>=8.0,<9", "Pillow==12.3.0", "jsonschema>=4.23,<5"]
 
 [project.scripts]
 workflow-hub = "agent_workflow_hub.cli:entrypoint"
+
+[tool.setuptools.package-data]
+"agent_workflow_hub.xiaozhi_hermes_bridge" = ["static/*.html", "static/*.css", "static/*.js"]
 
 [tool.pytest.ini_options]
 testpaths = [
@@ -40,5 +45,6 @@ testpaths = [
   "workflows/ssh-operations/tests",
   "workflows/desktop-client-automation/tests",
   "workflows/mobile-device-automation/tests",
+  "workflows/agent-session-gateway/tests",
 ]
 addopts = "-ra --import-mode=importlib"

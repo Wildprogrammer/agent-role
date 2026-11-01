@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-workflow-hub.local/agent-session-gateway/device-state-event.schema.json",
+  "title": "Lingxi normalized state event",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["runtime_epoch", "device_id", "connection_generation", "state_version", "device_state", "conversation_phase", "expression", "expression_version", "operation_id"],
+  "properties": {
+    "runtime_epoch": {"type": "string", "minLength": 1, "maxLength": 128},
+    "device_id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "connection_generation": {"type": "string", "minLength": 1, "maxLength": 128},
+    "state_version": {"type": "integer", "minimum": 1},
+    "device_state": {"enum": ["offline", "provisioning", "idle", "speaking", "updating", "error"]},
+    "conversation_phase": {"enum": ["none", "capturing", "transcribing", "thinking", "waiting_confirmation", "playing", "interrupted"]},
+    "expression": {"enum": ["offline", "pairing", "neutral", "listening", "thinking", "question", "speaking", "happy", "audio_testing", "updating", "error"]},
+    "expression_version": {"const": "1.0"},
+    "operation_id": {"type": "string", "maxLength": 128}
+  }
+}

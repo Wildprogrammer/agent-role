@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-workflow-hub.local/agent-session-gateway/device-snapshot.schema.json",
+  "title": "Lingxi device-center snapshot",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["device_id", "online", "session_id", "connection_generation", "binding", "pending_action", "device_status", "device_status_state", "capabilities", "capability_inventory"],
+  "properties": {
+    "device_id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "online": {"const": true},
+    "session_id": {"type": "string", "minLength": 1, "maxLength": 512},
+    "connection_generation": {"type": "string", "minLength": 1, "maxLength": 128},
+    "binding": {"type": "object"},
+    "pending_action": {"type": ["object", "null"]},
+    "device_status": {"type": "object", "maxProperties": 4},
+    "device_status_state": {"enum": ["observed", "unavailable"]},
+    "capabilities": {"type": "object", "additionalProperties": false, "required": ["stop_speaking", "set_volume"], "properties": {"stop_speaking": {"type": "boolean"}, "set_volume": {"type": "boolean"}}},
+    "capability_inventory": {"type": "array", "items": {"$ref": "device-capability.schema.json"}}
+  }
+}

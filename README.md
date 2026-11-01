@@ -56,6 +56,7 @@ agent-role 的 README、工作流说明和相关网页
 | 工作流 | 简短介绍 | 常见组合用途 |
 |---|---|---|
 | `3d-printing` | 设计、检查、拆分和切片 3D 打印模型，交付经检查的打印文件。 | 产品建模、制造准备 |
+| `agent-session-gateway` | 把灵溪/Xiaozhi、小爱等外部通道绑定到既有 Hermes 或 DeepSeek Harness 会话，保留同一宿主的连续历史，并提供受控的会话切换、附件和设备扩展。 | 实体语音助手、多入口 Agent 会话、电脑伴随屏 |
 | `bead-pattern` | 把本地图片转换为固定色板的拼豆图纸。 | 图像处理、手工作品设计 |
 | `daily-assistant` | 整理每日任务和进度，给出优先级建议并生成本地工作记录。 | 日程管理、工作汇报 |
 | `desktop-client-automation` | 使用 Cua Driver 或宿主原生 Computer Use 探索 Windows、macOS 桌面客户端及显式系统桌面；可按新鲜桌面截图动态点击主显示器图标，并把确认后的 Windows 操作路径固化为 Airtest 回放；支持通过共享组合语义复用精确版本的 Windows 应用组件，同时保持桌面图片和应用绑定独立。 | 桌面客户端操作、桌面图标操作、跨平台探索、Windows 自动化回放、组件复用 |

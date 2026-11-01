@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-workflow-hub.local/agent-session-gateway/device-capability.schema.json",
+  "title": "Lingxi device capability",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["capability_id", "version", "available", "effect", "confirmation", "source", "observed_generation", "constraints", "blocker"],
+  "properties": {
+    "capability_id": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]{0,127}$"},
+    "version": {"const": "1.0"},
+    "available": {"type": "boolean"},
+    "effect": {"enum": ["read", "write", "transient_write", "maintenance"]},
+    "confirmation": {"enum": ["none", "explicit_plan", "physical_only"]},
+    "source": {"enum": ["device_mcp", "xiaozhi_runtime", "policy"]},
+    "observed_generation": {"type": "string", "minLength": 1, "maxLength": 128},
+    "constraints": {"type": "object", "maxProperties": 16},
+    "blocker": {"type": "string", "maxLength": 128}
+  }
+}

@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>灵溪伴随屏</title>
+  <link rel="stylesheet" href="/static/style.css?v=8">
+</head>
+<body class="companion-page">
+  <div class="login" id="login">
+    <form class="login-card" id="login-form">
+      <div class="brand"><span class="brand-mark"></span><div><h1>灵溪伴随屏</h1><p class="muted">仅含设备交互权限</p></div></div>
+      <label>伴随屏密码<input id="login-password" type="password" autocomplete="current-password" maxlength="256" required></label>
+      <button class="primary" type="submit">打开伴随屏</button>
+      <p class="notice" id="login-notice">伴随屏无法修改配置或切换绑定。</p>
+    </form>
+  </div>
+  <main class="companion" id="companion">
+    <div class="butterfly-stage" id="butterfly-stage" aria-hidden="true"></div>
+    <section class="companion-panel">
+      <div class="face-wrap" id="face" data-state="offline" data-mood="none" aria-label="灵溪状态表情">
+        <div class="face"><span class="eye left"></span><span class="eye right"></span><span class="mouth"></span></div>
+      </div>
+      <div class="mic-indicator" id="mic-indicator" aria-live="polite" hidden><span class="mic-glyph"></span><span class="mic-wave"><i></i><i></i><i></i><i></i></span><span>正在听你说</span></div>
+      <section class="live-dialogue" id="live-dialogue" aria-label="当前问答" hidden>
+        <article class="dialogue-line question-line" id="question-line" hidden><span class="dialogue-role">你</span><p id="question-text"></p><span class="caption-cut" id="question-cut" hidden>内容已截断</span></article>
+        <article class="dialogue-line answer-line" id="answer-line" hidden><span class="dialogue-role">灵溪</span><p><span id="answer-text"></span><span class="caption-gap" id="answer-gap" hidden></span><span id="answer-tail"></span></p><span class="caption-cut" id="answer-cut" hidden>内容已截断</span></article>
+      </section>
+      <div class="meta companion-ui"><h1 id="state-title">等待设备</h1><p class="muted meta-detail" id="binding-title">尚未连接</p><p class="badge" id="device-id">离线</p></div>
+      <div class="companion-controls companion-ui">
+        <button class="danger" id="stop" disabled>停止播报</button>
+        <label>音量 <input id="volume" type="range" min="0" max="100" value="70" disabled></label>
+        <button id="privacy">隐私模式</button><button id="fullscreen">全屏</button>
+      </div>
+      <div class="companion-controls companion-ui" id="confirmation" hidden><button class="primary" id="confirm">确认操作</button><button class="danger" id="cancel">取消</button></div>
+      <p class="notice companion-ui" id="notice" aria-live="polite">正在等待灵溪设备上线……</p>
+    </section>
+  </main>
+  <script src="/static/common.js?v=2"></script>
+  <script src="/static/companion.js?v=6"></script>
+</body>
+</html>
