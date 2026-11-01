@@ -171,6 +171,7 @@ def test_default_store_is_external_to_repository() -> None:
         {"LOCALAPPDATA": "C:\\Users\\Example\\AppData\\Local"}
     )
 
-    assert str(path).lower().endswith(
-        "appdata\\local\\agent-workflow-hub\\xiaozhi-hermes-bindings.json"
+    normalized = str(path).replace("\\", "/").lower()
+    assert normalized.endswith(
+        "appdata/local/agent-workflow-hub/xiaozhi-hermes-bindings.json"
     )

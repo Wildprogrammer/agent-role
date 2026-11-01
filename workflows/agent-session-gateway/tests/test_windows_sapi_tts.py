@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
+import os
 from pathlib import Path
 import sys
 from types import ModuleType, SimpleNamespace
@@ -53,7 +54,13 @@ def test_windows_sapi_uses_file_backed_text_and_fixed_encoded_command(
         return SimpleNamespace(returncode=0, stderr=b"")
 
     monkeypatch.setattr(module.subprocess, "run", fake_run)
-    monkeypatch.setattr(module.os, "name", "nt")
+    # Replacing the adapter's module reference avoids changing global
+    # ``os.name`` and making pathlib construct WindowsPath objects on Linux.
+    monkeypatch.setattr(
+        module,
+        "os",
+        SimpleNamespace(name="nt", environ=os.environ),
+    )
     provider = module.TTSProvider(
         {
             "output_dir": str(tmp_path),
