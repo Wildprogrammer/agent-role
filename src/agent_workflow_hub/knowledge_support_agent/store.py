@@ -30,6 +30,10 @@ class TableBackend(Protocol):
 
     def read(self, name: str) -> list[dict[str, object]]: ...
 
+    def read_where(
+        self, name: str, column: str, values: Sequence[str]
+    ) -> list[dict[str, object]]: ...
+
     def table_names(self) -> tuple[str, ...]: ...
 
 
@@ -47,6 +51,16 @@ class InMemoryTableBackend:
 
     def read(self, name: str) -> list[dict[str, object]]:
         return [dict(row) for row in self._tables.get(name, ())]
+
+    def read_where(
+        self, name: str, column: str, values: Sequence[str]
+    ) -> list[dict[str, object]]:
+        expected = set(values)
+        return [
+            dict(row)
+            for row in self._tables.get(name, ())
+            if str(row.get(column, "")) in expected
+        ]
 
     def table_names(self) -> tuple[str, ...]:
         return tuple(sorted(self._tables))
@@ -90,6 +104,24 @@ class _LanceTableBackend:
         except Exception:
             return []
         return [dict(row) for row in table.to_arrow().to_pylist()]
+
+    def read_where(
+        self, name: str, column: str, values: Sequence[str]
+    ) -> list[dict[str, object]]:
+        if not values:
+            return []
+        if column not in {"generation", "source_kind"}:
+            raise ValueError("unsupported knowledge filter column")
+        if name not in self.table_names():
+            return []
+        table = self._database.open_table(name)
+        if column not in table.schema.names:
+            return []
+        predicate = " OR ".join(
+            f"{column} = '{value.replace(chr(39), chr(39) * 2)}'"
+            for value in dict.fromkeys(values)
+        )
+        return table.search().where(predicate).limit(None).to_arrow().to_pylist()
 
     def table_names(self) -> tuple[str, ...]:
         try:
@@ -173,9 +205,10 @@ class KnowledgeStore:
     ) -> None:
         """Append a complete generation, then atomically make it active.
 
-        The source-state pointer is written last.  If that write fails, readers
+        The source-state pointer is written after the append.  If it fails, readers
         continue filtering on the previous generation and the newly appended
-        rows remain harmless, inactive recovery data.
+        rows remain inactive recovery data. Only after activation are inactive
+        generations removed from the latest table snapshot.
         """
         if not self._backend.read("source_state"):
             self._backend.replace(
@@ -199,7 +232,7 @@ class KnowledgeStore:
         ]
         existing_keys = {
             (str(row.get("generation", "")), str(row.get("chunk_id", "")))
-            for row in self._backend.read("knowledge")
+            for row in self._backend.read_where("knowledge", "generation", (generation,))
         }
         pending = [
             row
@@ -209,6 +242,10 @@ class KnowledgeStore:
         self._backend.append("knowledge", pending)
         active_state = [dict(row, generation=generation) for row in source_state]
         self._backend.replace("source_state", active_state)
+        feedback_rows = self._backend.read_where(
+            "knowledge", "source_kind", ("user-confirmed-experience",)
+        )
+        self._backend.replace("knowledge", [*rows, *feedback_rows])
 
     def source_state(self) -> tuple[Mapping[str, object], ...]:
         return tuple(
@@ -280,7 +317,6 @@ class KnowledgeStore:
         return SearchResult(mode="hybrid", evidence=evidence)
 
     def _active_knowledge_rows(self) -> list[dict[str, object]]:
-        rows = self._backend.read("knowledge")
         experience_rows = [
             _experience_search_row(row)
             for row in self._backend.read("experience")
@@ -301,13 +337,18 @@ class KnowledgeStore:
             if row.get("generation")
         }
         if generations:
-            active_rows = [
+            active_rows = self._backend.read_where(
+                "knowledge", "generation", tuple(sorted(generations))
+            )
+            active_rows.extend(
                 row
-                for row in rows
-                if str(row.get("generation", "")) in generations
-                or row.get("source_kind") == "user-confirmed-experience"
-            ]
+                for row in self._backend.read_where(
+                    "knowledge", "source_kind", ("user-confirmed-experience",)
+                )
+                if str(row.get("generation", "")) not in generations
+            )
         elif real_state:
+            rows = self._backend.read("knowledge")
             # Legacy databases predate generation pointers.  Match their active
             # source versions so a failed upgrade cannot expose appended rows.
             active_versions = {
@@ -326,14 +367,12 @@ class KnowledgeStore:
             ]
         elif not raw_state:
             # Direct store callers without source state use their supplied rows.
-            active_rows = rows
+            active_rows = self._backend.read("knowledge")
         else:
             # A sentinel-only state means the first generation was never activated.
-            active_rows = [
-                row
-                for row in rows
-                if row.get("source_kind") == "user-confirmed-experience"
-            ]
+            active_rows = self._backend.read_where(
+                "knowledge", "source_kind", ("user-confirmed-experience",)
+            )
         active_rows = [
             row
             for row in active_rows

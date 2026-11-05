@@ -48,6 +48,127 @@ class FailingStateBackend(InMemoryTableBackend):
         super().replace(name, rows)
 
 
+class RejectFullKnowledgeReadBackend(InMemoryTableBackend):
+    def __init__(self) -> None:
+        super().__init__()
+        self.reject_full_knowledge_read = False
+
+    def read(self, name):
+        if name == "knowledge" and self.reject_full_knowledge_read:
+            raise AssertionError("active generation must be filtered by the backend")
+        return super().read(name)
+
+
+def test_active_generation_does_not_read_inactive_rows_into_memory(
+    tmp_path: Path,
+) -> None:
+    backend = RejectFullKnowledgeReadBackend()
+    target = KnowledgeStore(
+        tmp_path / "agent-a" / "knowledge-support" / "lancedb",
+        backend=backend,
+    )
+    target.replace_knowledge(
+        [chunk("active", "当前登录说明", "docs/login.md")],
+        vectors={},
+        generation="g1",
+    )
+    backend.append(
+        "knowledge",
+        [
+            {
+                **backend.read("knowledge")[0],
+                "chunk_id": "inactive",
+                "generation": "g0",
+            }
+        ],
+    )
+    target.replace_source_state(
+        [
+            {
+                "source_id": "repo",
+                "version": "a" * 40,
+                "manifest_json": "{}",
+                "generation": "g1",
+            }
+        ]
+    )
+    backend.reject_full_knowledge_read = True
+
+    assert [row["chunk_id"] for row in target.knowledge_rows()] == ["active"]
+
+
+def test_successful_publish_reclaims_inactive_generations(tmp_path: Path) -> None:
+    backend = InMemoryTableBackend()
+    target = KnowledgeStore(
+        tmp_path / "agent-a" / "knowledge-support" / "lancedb",
+        backend=backend,
+    )
+    target.publish_generation(
+        [chunk("old", "旧登录说明", "docs/login.md")],
+        vectors={},
+        generation="g1",
+        source_state=[
+            {"source_id": "repo", "version": "a" * 40, "manifest_json": "{}"}
+        ],
+    )
+
+    target.publish_generation(
+        [chunk("new", "新登录说明", "docs/new-login.md")],
+        vectors={},
+        generation="g2",
+        source_state=[
+            {"source_id": "repo", "version": "b" * 40, "manifest_json": "{}"}
+        ],
+    )
+
+    rows = backend.read("knowledge")
+    assert [row["chunk_id"] for row in rows] == ["new"]
+    assert {row["generation"] for row in rows} == {"g2"}
+
+
+def test_generation_retention_preserves_confirmed_experience(tmp_path: Path) -> None:
+    backend = InMemoryTableBackend()
+    target = KnowledgeStore(tmp_path / "database", backend=backend)
+    target.replace_knowledge(
+        [chunk("experience", "用户确认的说明", "experience/login")],
+        vectors={},
+        generation="feedback",
+    )
+    feedback = backend.read("knowledge")[0]
+    feedback["source_kind"] = "user-confirmed-experience"
+    backend.replace("knowledge", [feedback])
+
+    for generation in ("g1", "g2", "g2"):
+        target.publish_generation(
+            [chunk("current", "登录说明", "docs/login.md")],
+            vectors={},
+            generation=generation,
+            source_state=[{"source_id": "repo", "version": "a" * 40}],
+        )
+
+    assert len(backend.read("knowledge")) == 2
+    assert {row["chunk_id"] for row in target.knowledge_rows()} == {
+        "current", "experience"
+    }
+
+
+def test_real_lance_filter_and_retention(tmp_path: Path) -> None:
+    pytest.importorskip("lancedb")
+    target = KnowledgeStore(tmp_path / "database")
+    state = [{"source_id": "repo", "version": "a" * 40}]
+    old_chunks = [chunk(f"old-{i}", "旧说明", f"docs/{i}.md") for i in range(25)]
+    target.publish_generation(old_chunks, vectors={}, generation="g1", source_state=state)
+    current = [chunk(f"new-{i}", "新说明", f"docs/{i}.md") for i in range(25)]
+    target.publish_generation(
+        current, vectors={}, generation="g2'quoted", source_state=state
+    )
+
+    # More than the query builder's default limit; quoted values stay literals.
+    assert len(target.knowledge_rows()) == 25
+    assert len(target._backend.read("knowledge")) == 25
+    assert {row["generation"] for row in target.knowledge_rows()} == {"g2'quoted"}
+
+
 def test_store_keeps_one_database_path_and_two_core_tables(tmp_path: Path) -> None:
     target = store(tmp_path)
     target.replace_knowledge(
