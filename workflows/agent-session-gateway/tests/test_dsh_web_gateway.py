@@ -84,6 +84,7 @@ class FakeClient:
             },
             "session/projections": {"asOfSeq": 14, "values": {}},
             "session/prompt": {"accepted": True},
+            "session/cancel": {"accepted": True},
             "session/updateQueue": {"accepted": True},
         }
         if method == "session/page":
@@ -187,6 +188,36 @@ def test_version_gate_runs_before_authentication(tmp_path: Path) -> None:
         )
 
 
+def test_unsupported_expected_version_is_rejected_before_authentication(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(DshGatewayError, match="not supported"):
+        DeepSeekHarnessWebGateway(
+            base_url="http://127.0.0.1:5000",
+            launch_token="secret-launch-token",
+            dsh_home=dsh_home(tmp_path, "0.2.2"),
+            expected_version="0.2.2",
+            allowed_presets=("assistant-agent",),
+            client=FakeClient(),
+        )
+
+
+@pytest.mark.parametrize("version", ("0.2.0-rc.2", "0.2.1-rc.5"))
+def test_each_supported_version_passes_the_exact_version_gate(
+    tmp_path: Path, version: str
+) -> None:
+    adapter = DeepSeekHarnessWebGateway(
+        base_url="http://127.0.0.1:5000",
+        launch_token="secret-launch-token",
+        dsh_home=dsh_home(tmp_path, version),
+        expected_version=version,
+        allowed_presets=("assistant-agent",),
+        client=FakeClient(),
+    )
+
+    assert adapter.version == version
+
+
 def test_lists_allowlisted_presets_and_their_sessions(tmp_path: Path) -> None:
     client = FakeClient()
     instance = gateway(tmp_path, client)
@@ -216,11 +247,13 @@ def test_lists_allowlisted_presets_and_their_sessions(tmp_path: Path) -> None:
 def test_prompt_waits_for_the_correlated_durable_turn(tmp_path: Path) -> None:
     client = FakeClient()
     instance = gateway(tmp_path, client)
+    progress: list[str] = []
 
     result = instance.send_to_session(
         profile="assistant-agent",
         stored_session_id="dsh-session-1",
         text="hello",
+        on_progress=progress.append,
     )
 
     assert result.status == "complete"
@@ -228,10 +261,25 @@ def test_prompt_waits_for_the_correlated_durable_turn(tmp_path: Path) -> None:
     assert result.runtime_session_id == "dsh-session-1"
     assert result.user_row_id == 11
     assert result.text == "shared answer"
+    assert progress == ["shared answer"]
     prompt = next(body for method, body in client.calls if method == "session/prompt")
     request = prompt["payload"]["args"]["request"]  # type: ignore[index]
     assert request["mode"] == "queue"
     assert request["clientTimeZone"] == "Asia/Shanghai"
+
+
+def test_cancel_session_uses_native_dsh_contract(tmp_path: Path) -> None:
+    client = FakeClient()
+    instance = gateway(tmp_path, client)
+
+    status = instance.cancel_session(
+        profile="assistant-agent", stored_session_id="dsh-session-1"
+    )
+
+    assert status == "requested"
+    method, body = client.calls[-1]
+    assert method == "session/cancel"
+    assert body["payload"]["args"]["request"] == {"sessionId": "dsh-session-1"}
 
 
 def test_prompt_streams_file_then_uses_receipt(tmp_path: Path) -> None:

@@ -20,7 +20,7 @@ def test_skill_is_complete_and_exposes_only_bounded_entrypoints() -> None:
     contract = validate_skill(SKILL, frontmatter, body)
 
     assert contract.name == "agent-session-gateway"
-    assert contract.metadata["workflow-version"] == "0.9.1"
+    assert contract.metadata["workflow-version"] == "0.9.3"
     assert contract.metadata["display-name"] == "Agent Session Gateway"
     assert json.loads(contract.metadata["required-capabilities"]) == []
     assert set(workflow_entrypoints(contract.metadata)) == {
@@ -67,6 +67,9 @@ def test_skill_fails_closed_and_keeps_future_work_out_of_scope() -> None:
         "通道适配器",
         "宿主适配器",
         "设备扩展",
+        "一次性、Profile-scoped interactive ticket",
+        "不启动、重启或修改 Hermes",
+        "不得在原生发现失败时改走 DeepSeek Harness",
         "不是工作流资源",
         "`merged-binary.bin` 仅用于物理工厂烧录或救援",
     ):
@@ -75,9 +78,9 @@ def test_skill_fails_closed_and_keeps_future_work_out_of_scope() -> None:
     upstream_reference = (
         WORKFLOW_ROOT / "references" / "xiaozhi-server-v0.9.7.md"
     ).read_text(encoding="utf-8")
-    assert "deterministic `bound_agent` routing" in upstream_reference
-    assert "two isolated Python environments" in upstream_reference
-    assert "Real microphone, speaker, wake-word" in upstream_reference
+    assert "production `bound_agent` path" in upstream_reference
+    assert "physical-device acceptance run" in upstream_reference
+    assert "Python 3.10" in upstream_reference
 
 
 def test_json_schemas_are_closed_and_never_define_a_secret_value() -> None:
@@ -128,6 +131,7 @@ def test_managed_dsh_startup_keeps_launch_token_off_disk_and_kills_with_parent()
     assert ".stdout.log" not in script
     assert "DshRuntimeRoot" not in script
     assert "dshConfig.dsh_home" in script
+    assert "'0.2.0-rc.2', '0.2.1-rc.5'" in script
     assert "CancelDshSessionOnStart" in script
     assert "desktop-cancel-session" in script
     assert "RemoveDshQueuedItemSessionOnStart" in script

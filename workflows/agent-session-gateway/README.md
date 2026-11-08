@@ -10,7 +10,7 @@ projection. It does not copy chat history or merge history between Agent Hosts.
 ```text
 Lingxi/Xiaozhi ─┐
 XiaoAi MCP      ├─ Agent Session Gateway ─ Hermes session
-future channels ┘                         └ DeepSeek Harness session
+Android 手机    ┘                         └ DeepSeek Harness session
 ```
 
 This repository provides the Gateway and its pinned adapter bundle. A complete
@@ -20,7 +20,7 @@ physical voice system additionally needs:
 - `xiaozhi-esp32-server` v0.9.7 at commit
   `87c6df77b0220ddbd8fc804f984f83f69f3225e5`;
 - at least one supported Agent Host: Hermes Agent 0.21+ or DeepSeek Harness Web
-  0.2.0-rc.2;
+  0.2.0-rc.2 or 0.2.1-rc.5;
 - the server-side ASR, VAD, and TTS dependencies selected by the operator;
 - supported ESP32-S3 hardware and audio modules.
 
@@ -33,7 +33,7 @@ public tunnel manager.
 | --- | --- |
 | Agent Workflow Hub and Gateway | Python 3.11+ |
 | Pinned Xiaozhi server | Python 3.10 in an isolated environment |
-| Managed DeepSeek Harness | Node.js plus DSH 0.2.0-rc.2 |
+| Managed DeepSeek Harness | Node.js plus DSH 0.2.0-rc.2 or 0.2.1-rc.5 |
 | Lingxi firmware build | ESP-IDF release/v6.1; see the firmware repository |
 
 Do not install the Hub package into the Python 3.10 Xiaozhi environment. The
@@ -60,6 +60,21 @@ Configuration, bindings, credentials, models, logs, attachments, and runtime
 backups stay outside both source repositories. Never commit a real API key,
 Bearer token, launch token, MAC address, device UUID, LAN address, session ID,
 or Agent inventory.
+
+## Android 手机独立终端
+
+手机可直接提供文字、麦克风、相机、扬声器和字幕，无需 ESP32 在线。
+它通过专用 HTTPS / WebSocket 入口绑定已有 Hermes 或 DeepSeek Harness 会话。
+支持仅文字模式、照片压缩与上传进度、取消上传，以及拍照返回后的有限自动重连；
+恢复连接不自动重发消息。电脑端仍使用同一 canonical 会话。
+
+参见 [手机端部署说明](references/mobile-client.md) 和
+[手机配置模板](references/mobile-config.json.example)。局域网使用专用 CA，公网使用受信 HTTPS
+反向代理；证书、私钥、密码和真实入口地址均由部署者保存在仓库外。
+慢公网链路仍可能断开，压缩图可降低传输量，不能保证大原图稳定上传。
+
+Hermes 0.22+ 使用原生 gateway 与一次性连接 ticket，并显式查询 stored 会话；
+旧版 legacy serve 路径继续保留，不把两种凭据机制混用。
 
 ## Compatibility names
 

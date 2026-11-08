@@ -83,6 +83,24 @@ class TransientCompanionBroker:
         self._resume_leases: dict[str, _ResumeLease] = {}
         self._lock = threading.RLock()
 
+    def wait_for_connection(self, session_token: str, previous: str) -> dict[str, object]:
+        """Give an already watching page a baseline before the next device wakes."""
+        now = self._clock()
+        with self._lock:
+            self._reap_locked(now)
+            lease = self._resume_leases.get(previous)
+            if lease and not lease.device_id and secrets.compare_digest(lease.session_token, session_token):
+                lease.expires_at = now + SUBSCRIPTION_TTL_SECONDS
+                return {"resume_token": previous}
+            if self._devices or len(self._resume_leases) >= MAX_RESUME_LEASES:
+                return {"resume_token": ""}
+            token = secrets.token_urlsafe(32)
+            self._resume_leases[token] = _ResumeLease(
+                token, session_token, "", "", self._sequence,
+                now + SUBSCRIPTION_TTL_SECONDS,
+            )
+            return {"resume_token": token}
+
     def register_connection(self, *, device_id: str, connection_generation: str) -> None:
         now = self._clock()
         with self._lock:
@@ -91,6 +109,10 @@ class TransientCompanionBroker:
             if current is not None and current.connection_generation == connection_generation:
                 return
             self._drop_device_subscriptions_locked(device_id)
+            for lease in self._resume_leases.values():
+                if not lease.device_id:
+                    lease.device_id = device_id
+                    lease.connection_generation = connection_generation
             sequence = self._next_sequence_locked()
             self._devices[device_id] = _LiveProjection(
                 device_id=device_id,

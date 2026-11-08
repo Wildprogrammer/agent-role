@@ -69,6 +69,7 @@ class FakeGateway:
         self.sent: list[tuple[str, str, str]] = []
         self.created: list[tuple[str, str]] = []
         self.compressed: list[tuple[str, str]] = []
+        self.cancelled: list[tuple[str, str]] = []
 
     def list_sessions(self, profile: str, *, limit: int = 20):
         assert limit <= 100
@@ -104,6 +105,10 @@ class FakeGateway:
             message="",
         )
 
+    def cancel_session(self, *, profile: str, stored_session_id: str):
+        self.cancelled.append((profile, stored_session_id))
+        return "cancelled"
+
 
 def _expected(binding: SessionBinding | None = None) -> dict[str, object]:
     current = binding or SessionBinding(
@@ -115,6 +120,28 @@ def _expected(binding: SessionBinding | None = None) -> dict[str, object]:
         "expected_stored_session_id": current.stored_session_id,
         "expected_revision": current.revision,
     }
+
+
+def test_cancel_bound_voice_revalidates_snapshot_and_calls_exact_host(tmp_path: Path) -> None:
+    gateway = FakeGateway()
+    service = SharedConversationService(
+        _config(), BindingStore((tmp_path / "bindings.json").resolve()), gateway
+    )
+    binding = service.bind(
+        device_id="esp32-s3",
+        profile="research-agent",
+        stored_session_id="stored-1",
+    )
+
+    status = service.cancel_bound_voice(device_id="esp32-s3", **_expected(binding))
+
+    assert status == "cancelled"
+    assert gateway.cancelled == [("research-agent", "stored-1")]
+    with pytest.raises(BridgeRejected, match="binding changed"):
+        service.cancel_bound_voice(
+            device_id="esp32-s3",
+            **(_expected(binding) | {"expected_revision": binding.revision + 1}),
+        )
 
 
 def test_browser_binding_mutations_require_the_expected_revision(tmp_path: Path) -> None:

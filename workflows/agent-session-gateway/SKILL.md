@@ -1,10 +1,10 @@
 ---
 name: agent-session-gateway
 description: Use when an external channel such as Lingxi/Xiaozhi or XiaoAi needs to bind to and continue an existing canonical conversation on a supported Agent host, while preserving host isolation, confirmation, authentication, deduplication, attachments, and optional device capabilities.
-compatibility: Agent Workflow Hub spec 1.0; pinned xiaozhi-esp32-server v0.9.7 on Windows with Python 3.10; Python 3.11+, Hermes Agent 0.21+, and DeepSeek Harness Web 0.2.0-rc.2; hardware is optional for software validation.
+compatibility: Agent Workflow Hub spec 1.0; pinned xiaozhi-esp32-server v0.9.7 on Windows with Python 3.10; Python 3.11+, Hermes Agent 0.21 legacy serve or 0.22+ native gateway, and DeepSeek Harness Web 0.2.0-rc.2 or 0.2.1-rc.5; hardware is optional for software validation.
 metadata:
   spec-version: "1.0"
-  workflow-version: "0.9.1"
+  workflow-version: "0.9.3"
   display-name: "Agent Session Gateway"
   execution-modes: '["single-agent"]'
   no-multi-agent-fallback: "serial"
@@ -35,6 +35,8 @@ metadata:
 - **宿主适配器**负责 Hermes Desktop、DeepSeek Harness Web 及未来 Agent Host 的原生会话协议；宿主之间不广播、不复制历史、不自动回退。
 - **设备扩展**负责灵溪的音量、停止播报、OLED、音频诊断和连接状态；这些能力不得改变网关的会话绑定与历史语义。
 
+可选 **Android 手机独立终端** 由手机自身提供麦克风、相机、扬声器和表情/字幕，不依赖物理 ESP32 上线。接入方式、TLS配置、运行边界和验收见 `references/mobile-client.md`；启动器以 `-LingxiMobileConfig <仓库外绝对JSON路径>` 显式启用。同一 Xiaozhi 进程复用已加载语音识别、EdgeTTS配置和语音侧 adapter；手机拥有独立 `mobile-<随机ID>` 绑定，不接管原设备。原 admin/companion 两个回环权限面保持不变，手机新增专用权限面。
+
 固定上游 `xiaozhi-esp32-server` 是外部通道运行时，负责设备 WebSocket、ASR/VAD/TTS、音频传输和 Xiaozhi 协议。工作流只拥有安装到该运行时的适配器源文件和安装契约；上游 checkout 中的已安装文件只是部署副本，不是权威源码。
 
 ESP32 固件源码、板型定义和生成的 `xiaozhi.bin`、`generated_assets.bin`、`merged-binary.bin` 属于独立的灵溪固件发布域，不是工作流资源，也不得提交到本工作流 Git 目录。工作流只保存构建/发布契约、制品元数据、大小、摘要、兼容性和外部位置；`merged-binary.bin` 仅用于物理工厂烧录或救援，不能作为远程 OTA 制品。
@@ -45,7 +47,7 @@ ESP32 固件源码、板型定义和生成的 `xiaozhi.bin`、`generated_assets.
 
 ## 非目标
 
-- 不实现 Xiaozhi 官方云、MQTT、通用 MCP 客户端、域名、TLS 证书或公网隧道管理；小爱 MCP 只提供回环服务，公网 HTTPS 由用户已有的独立隧道工具承载，现有 Xiaozhi/控制端口不得随之暴露。
+- 不实现 Xiaozhi 官方云、MQTT、通用 MCP 客户端、域名或公网隧道管理；手机入口可使用用户提供的TLS证书，并提供专用LAN测试证书生成脚本（不安装系统信任）；小爱 MCP 只提供回环服务，公网 HTTPS 由用户已有的独立隧道工具承载，现有 Xiaozhi/控制端口不得随之暴露。
 - 不安装、启动、停止或修改 Hermes，不创建 Profile，不启用 `api_server`，不生成 API 密钥。
 - 不执行 shell、键鼠或 USB HID 操作，不自动批准 Hermes 的工具调用。
 - 不替代 ESP32 固件、音频驱动、唤醒词、AEC、功放、扬声器或会议软件适配。
@@ -67,9 +69,11 @@ Hermes Profile 白名单完全由仓库外桥接配置的 `profiles` 数组提�
 
 小爱 MCP 工具固定为 `list_agents`、`list_sessions`、`show_binding`、`bind_session`、`prepare_attachment_upload`、`send_message`。会话列表只返回 ID、标题和最小时间/计数/运行状态，不返回 preview、cwd 或历史正文。首次绑定必须指向刚列出的真实会话；已有绑定的改绑先返回 180 秒一次性 `confirmation_id`，只有用户明确确认后以相同目标和编号再次调用才落盘。`prepare_attachment_upload` 绑定当时完整 binding snapshot，返回预分配的 `attachment_id` 和只含高熵一次性 token 的短时 HTTPS 上传页；不得复用长期 MCP Bearer。上传流式写入临时文件，校验大小、扩展名、MIME、魔数或 UTF-8 文本后原子发布；允许 JPEG、PNG、WebP、PDF、TXT、MD、CSV、JSON，拒绝未知类型、SVG/HTML、脚本、可执行文件、压缩包和 Office 文件。单文件上限 50 MiB，每条消息最多 4 个附件且合计最多 100 MiB；Hermes 图片另受 25 MiB 上限。`send_message` 要求客户端提供稳定 `request_id`，正文先受字符上限约束，可选 `attachment_ids` 只能引用已完成且绑定快照仍匹配的附件；同一进程缓存窗口内重复 ID+正文+相同附件集合只回放原结果，ID 相同而正文或附件不同则拒绝；未知结果和请求取消同样缓存且禁止自动重发。缓存 TTL 从宿主调用完成时开始，统一执行过期清理与 256 条硬上限；确定未写入宿主的未绑定/参数拒绝不占用写入去重缓存。这是有限去重，不承诺客户端用新 ID 重新发送时的 exactly-once。
 
-可选 `deepseek_harness` 块只接受数值回环 HTTP origin、仓库外绝对 `dsh_home`、固定版本 `0.2.0-rc.2`、只保存变量名的 `launch_token_env` 和显式 `allowed_presets`。启动凭据由 DSH Web 每次启动生成，只能暂存在父进程环境和网关内存中，不写入配置、绑定、响应或持久日志。Preset 白名单完全来自该块的 `allowed_presets`；公开示例只使用 `standard`、`assistant-agent` 等合成名称。
+可选 `deepseek_harness` 块只接受数值回环 HTTP origin、仓库外绝对 `dsh_home`、精确版本 `0.2.0-rc.2` 或 `0.2.1-rc.5`、只保存变量名的 `launch_token_env` 和显式 `allowed_presets`。每个实例必须声明并匹配其中一个版本，不接受 `latest`、范围、自动降级或跨版本静默回退。启动凭据由 DSH Web 每次启动生成，只能暂存在父进程环境和网关内存中，不写入配置、绑定、响应或持久日志。Preset 白名单由外部配置的 `allowed_presets` 明确提供，公开示例不附带维护者的真实列表。
 
 Desktop 共享模式另有一个仓库外绑定文件，默认位于 `%LOCALAPPDATA%\agent-workflow-hub\xiaozhi-hermes-bindings.json`，可用 `XIAOZHI_HERMES_BINDING_STORE` 指向绝对路径。绑定键必须使用 Xiaozhi 稳定 `device_id`，不能使用每次 WebSocket 重连都会变化的 `session_id`。文件只保存设备 ID、host、Profile/Preset、宿主 session ID、标题和 revision，不保存 Hermes/DSH 会话令牌、聊天内容或 API 密钥，并使用临时文件加原子替换写入。旧 1.0/1.1 绑定在读取时解释为 `host=hermes`，下一次写入迁移到 1.2。
+
+Hermes Desktop 传输优先使用 0.22+ 原生 Gateway：通过 Hermes 安装器报告的运行时 Python，在同用户私有控制通道中只读发现当前 Profile 的 loopback endpoint，并为每次 WebSocket 连接签发一次性、Profile-scoped interactive ticket；不启动、重启或修改 Hermes。ticket 只在私有子进程 stdio 和 WebSocket 子协议中短暂存在，不写入绑定、配置、响应或日志。Hermes 0.21 仍可回退到已有的 live serve ledger + 匹配发布 Token，二者均继续使用同一 `session.list/resume/create/compress`、`prompt.submit` 和附件 RPC，因此 canonical session 与电脑端接手语义不变。不得在原生发现失败时改走 DeepSeek Harness。
 
 可选控制面仅在 Xiaozhi 进程环境显式设置 `LINGXI_CONTROL_ENABLED=1` 时启用。`LINGXI_RUNTIME_CONFIG` 必须是当前 Xiaozhi `data/.config.yaml` 的仓库外绝对路径；可选 `LINGXI_CONTROL_BACKUP_DIR` 也必须是绝对路径。默认监听 `127.0.0.1:8765` 管理端和 `127.0.0.1:8766` 伴随屏，可用 `LINGXI_CONTROL_ADMIN_PORT` / `LINGXI_CONTROL_COMPANION_PORT` 改为两个不同的非特权端口。两端默认密码均为 `admin`；`LINGXI_CONTROL_PASSWORD` 可统一覆盖，`LINGXI_CONTROL_ADMIN_PASSWORD` / `LINGXI_CONTROL_COMPANION_PASSWORD` 可分别覆盖且优先级更高。空白或超过 256 字符的显式配置拒绝启动，不静默回退。密码可重复登录并换取固定 scope 的短期 HttpOnly、SameSite=Strict Cookie 和 CSRF token；登录失败有有界限流，每端活动会话数有固定上限。密码不进入命令参数、响应、日志、浏览器 DTO 或文件；旧 bootstrap 文件和 code 均不再读取或认证。管理端可列 Agent/会话、revision-safe 绑定/解绑及配置 preview/apply/rollback；伴随屏只能读取投影状态和版本化事件、停止当前播报、设置设备明确暴露的绝对音量，以及确认或取消设备当前唯一 prepared action。两端均拒绝非回环 Host、跨源 Origin、CORS、非 JSON 写请求和超限正文。默认 `admin` 仅用于用户确认的本机便利模式，不构成操作系统用户隔离；多人或不受信本机环境必须配置不同强密码。
 
@@ -90,8 +94,9 @@ Desktop 共享模式另有一个仓库外绑定文件，默认位于 `%LOCALAPPD
 - `list_sessions` / `bind_session` / `show_binding` / `unbind_session`：列举、绑定、查看或解绑稳定设备与既有宿主对话；`list_sessions` 和 `bind_session` 显式接受 `host`，省略时仅为旧客户端默认 `hermes`。语音兼容调用可省略 `binding_revision`；浏览器 bind/unbind 必须携带当前 revision，未绑定为 `0`，桥接在设备锁内比较后才写入；
 - `dispatch_shared`：供桌面和兼容客户端向稳定绑定发送消息，始终要求真实的 `confirmed: true`；
 - `dispatch_bound_voice`：仅供受信 Xiaozhi 私有父进程提交最终普通语音；只有 `bound_voice_dispatch_mode=direct` 时免逐条确认，并禁止携带 `confirmed`。两种共享发送都必须携带读取绑定时的 `host`、Profile/Preset、宿主 session ID 和 binding revision；桥接在跨进程设备操作锁内重新匹配该不可变快照，再完成唯一一次宿主写入；
+- `dispatch_bound_voice` 只有在私有父进程显式发送 `stream_progress: true` 后，才可在最终响应前发送 `status=progress` 的累计公开正文；旧单帧客户端未协商时永远只收到最终帧。Hermes 可投递累计增量，DeepSeek Harness 仅在 durable `turn/end` 后投递已确认的最终正文，避免中间 assistant message 覆盖最终结论。父进程只把进度帧用于同一设备、同一 TTS generation 和不可变 sentence ID 的动态字幕与有界分句 TTS，不把它当作第二次宿主写入；停止后旧 generation 的进度、最终补句和字幕必须全部丢弃。`cancel_bound_voice` 只能由受信私有父进程携带当前 in-flight 快照调用，通过独立控制子进程执行 Hermes `session.interrupt` 或 DeepSeek Harness `session/cancel`，并保留 cancelling 墓碑直至数据面与控制面都收敛，期间禁止下一回合；DSH `{accepted:true}` 只返回 `requested`，不得冒充已观察到 `cancelled`；
 - `create_session`：使用准备时的绑定快照调用原生 `session.create`，必须包含不可复用到其他逻辑操作的 `idempotency_key` 和 `confirmed: true`；明确成功后才以 CAS 原子改绑设备，旧会话不删除；
-- `compress_session`：Hermes 按准备时的绑定快照恢复会话后调用原生 `session.compress`，始终要求 `confirmed: true`；只有明确 `compressed` 且返回 replacement stored session ID 时才以 CAS 更新绑定。DSH 0.2.0-rc.2 本阶段明确返回不支持，不把文字“压缩上下文”作为普通 prompt 发送。
+- `compress_session`：Hermes 按准备时的绑定快照恢复会话后调用原生 `session.compress`，始终要求 `confirmed: true`；只有明确 `compressed` 且返回 replacement stored session ID 时才以 CAS 更新绑定。DSH `0.2.0-rc.2` 与 `0.2.1-rc.5` 本阶段均未提供经过网关验证的压缩契约，因此明确返回不支持，不把文字“压缩上下文”作为普通 prompt 发送。
 
 ## 输出与命名规则
 
@@ -111,7 +116,7 @@ Hermes 原生 `session.create` 会立即生成 live runtime/stored ID，但无 s
 
 ## 依赖和运行前检查
 
-先用绝对配置路径运行 `doctor`。它只验证本地配置，计算供启动确认使用的文件字节 SHA-256，并报告各 `api_key_env` 是否存在，不读取或打印值，也不发起网络请求。`configuration_ready_live_not_checked` 只表示配置和环境变量已就绪，绝不表示 Hermes 可用。实时提交仍需另行只读确认 Hermes Agent 0.21+、目标 Profile 已注册并启用 `platforms.api_server.enabled: true`、对应 Profile 环境中有 `API_SERVER_KEY`。配置与请求路径必须是已存在的绝对文件。
+先用绝对配置路径运行 `doctor`。它只验证本地配置，计算供启动确认使用的文件字节 SHA-256，并报告各 `api_key_env` 是否存在，不读取或打印值，也不发起网络请求。`configuration_ready_live_not_checked` 只表示配置和环境变量已就绪，绝不表示 Hermes 可用。Desktop 共享模式随后用 `desktop-doctor` 只读确认 Hermes Agent 0.21 legacy serve 或 0.22+ native gateway，并逐个确认白名单 Profile 可执行 `session.list`；0.22+ 原生模式不要求 `platforms.api_server` 或 `API_SERVER_KEY`。只有旧的非绑定 Runs API `dispatch` 路径才继续要求目标 Profile 启用 `platforms.api_server.enabled: true` 并提供对应 `API_SERVER_KEY`。配置与请求路径必须是已存在的绝对文件。
 
 自建服务端集成固定使用 `xiaozhi-esp32-server` v0.9.7 的 commit `87c6df77b0220ddbd8fc804f984f83f69f3225e5`，细节见 `references/xiaozhi-server-v0.9.7.md`。安装器只向该精确版本写入四个工作流自有适配文件，必须先完整预检全部目标，再以同目录临时文件和原子替换逐项安装；遇到不同内容且不属于已登记受管版本的已有文件时拒绝覆盖。音频模块和 ESP32 不是 `doctor`、`simulate`、插件验证或回环 WebSocket 文本测试的前置条件。固件构建和板级接线由 Xiaozhi 源码工程负责，不在本工作流内复制 ESP-IDF 构建系统。
 
@@ -127,7 +132,7 @@ Hermes 原生 `session.create` 会立即生成 live runtime/stored ID，但无 s
 
 1. 完整读取本 Skill、桥接三个 JSON Schema；涉及能力中心、诊断、更新或恢复时再完整读取五个 `device-*` / `release-manifest` Schema；同时读取 `references/xiaozhi-server-v0.9.7.md` 和外部桥接配置，确认请求来自配置命名的唯一受信 Xiaozhi 服务端父进程。
 2. 检查上游 checkout 的精确 commit，再以安装器 dry-run 检查四个目标；只有用户已批准的软件部署范围内才使用 `--apply`。不同内容的目标文件必须停下审查，不能强制覆盖。
-3. 运行 `doctor` 检查配置、摘要和桥接环境变量；它不宣称实时就绪。随后用 Hermes 原生命令只读检查版本、Profile 注册和每个目标的 `platforms.api_server.enabled`；若配置 DSH，再检查 Web 包为 `0.2.0-rc.2`、同一 Web origin 可认证以及白名单 Preset 健康。任一项不足时明确报告对应宿主不可用，不把请求回退到另一宿主。
+3. 运行 `doctor` 检查配置、摘要和桥接环境变量；它不宣称实时就绪。随后用 Hermes 原生命令只读检查版本、Profile 注册和每个目标的 `platforms.api_server.enabled`；若配置 DSH，再检查 Web 包精确匹配配置声明的 `0.2.0-rc.2` 或 `0.2.1-rc.5`、同一 Web origin 可认证以及白名单 Preset 健康。任一项不足时明确报告对应宿主不可用，不把请求回退到另一宿主。
 4. 用 `simulate` 验证桥接协议，再运行插件验证器。启动回环服务后，用 `simulate-websocket` 验证“列表 → 切换 → 再列表”、普通正文直接进入当前绑定，以及“生命周期准备 → 取消”。静音测试 TTS 只证明协议事件，不代表真实语音验收。
 5. 明确控制短语由本地兼容适配器确定性路由：统一列出 Agent、按 host 列会话、绑定、确认、取消、开启新会话和压缩上下文；其余最终非空语音直接交给当前稳定绑定。会话控制不得交给基础聊天模型猜测或作为普通 prompt 提交。“清除/清空/重置上下文”必须先追问是压缩当前会话还是开启空白新会话，澄清后再准备并确认，绝不删除历史。正文中只是提到这些短语时按普通正文处理。
 6. 用户明确批准当前配置的白名单、调用方身份、确认规则和实时提交范围后，把 `doctor` 返回的精确 `config_sha256` 作为启动参数。字节不一致必须拒绝启动。
@@ -146,7 +151,7 @@ Hermes 原生 `session.create` 会立即生成 live runtime/stored ID，但无 s
 
 控制台 preview 只生成内存计划，apply/rollback 只写磁盘配置并创建保护备份；任何服务重启仍需单独取得用户对目标配置摘要和短暂中断的确认。伴随屏确认按钮只能消费设备当前公开的精确 `action_id`，不能构造任意 dispatch、新会话或压缩请求；停止播报和绝对音量只作用于当前注册的 live connection，设备离线或未暴露能力时必须禁用并明确失败。
 
-旧非绑定 `dispatch` 是否需要二次确认由 `require_confirmation` 决定；为 `true` 时缺少 `confirmed: true` 必须在外部调用前失败。`dispatch_shared` 和 `desktop-send` 始终要求真实确认；`dispatch_bound_voice` 只在独立直写策略启用时免确认，且不得携带或伪造确认字段。`create_session` 与 `compress_session` 永久强制二次确认，不受上述配置开关影响。共享生命周期准备项绑定 device ID、host、Profile/Preset、Xiaozhi session ID、宿主 session ID、binding revision、内部操作 ID 和 180 秒有效期，以覆盖设备播报和一次语音重试；同一设备同时只能有一个待确认项。确认时先重新读取绑定，再把准备快照随执行请求提交。绑定、解绑、正文发送、创建和压缩在所有桥接进程间共用按 device ID 派生的操作锁，锁内重新匹配快照并覆盖宿主写入，避免复核与提交之间换绑导致目标漂移。直接正文提交期间也登记进程内单设备 in-flight 状态；`pending`、`outcome_unknown`、`conflict`、`partial_failure` 或 `reconciliation_required` 后不得重复提交或自动重放，桥接进程重启后也不得恢复或重放未知请求。旧兼容 `dispatch` 路径只绑定其 Xiaozhi session、活动 Profile、正文和内部操作 ID，并使用相同 180 秒 TTL。桥接把私有 stdio 父进程列为可信计算基：生命周期确认字段只能由匹配 `trusted_caller_id` 的父进程在完成一次真实用户确认后写入，不得由设备端或桥接层无条件补写。小爱网络适配器使用独立 Bearer 认证、服务端固定设备身份、有限速率和显式 `request_id` 防重放契约；不能复用 caller_id 字符串充当凭据，也不能把小爱能访问 MCP 误写成拥有生命周期确认权限。
+旧非绑定 `dispatch` 是否需要二次确认由 `require_confirmation` 决定；为 `true` 时缺少 `confirmed: true` 必须在外部调用前失败。`dispatch_shared` 和 `desktop-send` 始终要求真实确认；`dispatch_bound_voice` 只在独立直写策略启用时免确认，且不得携带或伪造确认字段。`create_session` 与 `compress_session` 永久强制二次确认，不受上述配置开关影响。共享生命周期准备项绑定 device ID、host、Profile/Preset、Xiaozhi session ID、宿主 session ID、binding revision、内部操作 ID 和 180 秒有效期，以覆盖设备播报和一次语音重试；同一设备同时只能有一个待确认项。确认时先重新读取绑定，再把准备快照随执行请求提交。绑定、解绑、正文发送、创建和压缩在所有桥接进程间共用按 device ID 派生的操作锁，锁内重新匹配快照并覆盖宿主写入，避免复核与提交之间换绑导致目标漂移。直接正文提交期间也登记进程内单设备 in-flight 状态；播放停止先本地清队列，再以不可变绑定快照尝试取消宿主回合，未获得宿主确认时只能报告 `requested`。`pending`、`outcome_unknown`、`conflict`、`partial_failure` 或 `reconciliation_required` 后不得重复提交或自动重放，桥接进程重启后也不得恢复或重放未知请求。旧兼容 `dispatch` 路径只绑定其 Xiaozhi session、活动 Profile、正文和内部操作 ID，并使用相同 180 秒 TTL。桥接把私有 stdio 父进程列为可信计算基：生命周期确认字段只能由匹配 `trusted_caller_id` 的父进程在完成一次真实用户确认后写入，不得由设备端或桥接层无条件补写。小爱网络适配器使用独立 Bearer 认证、服务端固定设备身份、有限速率和显式 `request_id` 防重放契约；不能复用 caller_id 字符串充当凭据，也不能把小爱能访问 MCP 误写成拥有生命周期确认权限。
 
 ## 失败恢复
 
@@ -175,7 +180,7 @@ Hermes 原生 `session.create` 会立即生成 live runtime/stored ID，但无 s
 - `list_agents` 同时返回 Hermes Profile 和 DSH Preset 且每项携带 host；绑定 DeepSeek Harness 后发送只调用 DSH Web，绑定 Hermes 后只调用 Hermes Desktop，不广播、不自动回退。
 - 普通“Profile / 智能体 / Agent 列表”必须确定性调用统一目录并完整按 host 返回；同名 Agent 的热切换先选择 host，再选择已有会话，切换未完成期间同一设备的任何连接都不能把正文提交给旧绑定，取消或过期后原绑定保持不变。
 - `bound_agent` 是生产默认网关模式，不构造 OpenAI/Ollama 客户端；远端基础 LLM 与本地 Ollama 是两个可选显式配置，缺少远端 API key 时必须拒绝切换或继续保留已运行的旧配置，二者都不得作为故障回退。
-- DeepSeek Harness 只接受 `0.2.0-rc.2` 和数值回环 Web origin；launch token 不出现在配置、响应、绑定文件或残留 stdout 日志。
+- DeepSeek Harness 只接受精确版本 `0.2.0-rc.2` 或 `0.2.1-rc.5` 和数值回环 Web origin；每个实例只选择一个匹配已安装包的版本，launch token 不出现在配置、响应、绑定文件或残留 stdout 日志。
 - “开启/新建/重新开始会话”必须确定性进入准备门，确认后恰好调用一次原生 `session.create`，成功后 CAS 改绑，失败或结果未知时保留旧绑定；旧会话不删除。
 - 会话控制短语只按规范化后的完整用户话语精确匹配；正文中仅包含“开启新会话”或“压缩上下文”不得触发生命周期工具。显式“交给当前智能体：<正文>”作为兼容别名剥离前缀后直接提交一次，不进入普通消息确认门。
 - “压缩上下文/压缩当前会话”必须确定性进入准备门，确认后恢复当前会话并调用原生 `session.compress`；压缩使用不少于 660 秒的独立 RPC 等待，恢复时省略历史传输。只有明确 `compressed` 与 replacement ID 才改绑；`aborted`、`pending`、畸形响应或断线不得宣称成功。

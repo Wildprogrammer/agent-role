@@ -86,13 +86,16 @@ def test_config_rejects_secret_value_and_duplicate_profiles() -> None:
         BridgeConfig.from_mapping(mapping)
 
 
-def test_config_accepts_closed_deepseek_web_contract(tmp_path: Path) -> None:
+@pytest.mark.parametrize("version", ("0.2.0-rc.2", "0.2.1-rc.5"))
+def test_config_accepts_closed_deepseek_web_contract(
+    tmp_path: Path, version: str
+) -> None:
     mapping = config_mapping(
         deepseek_harness={
             "base_url": "http://127.0.0.1:8765",
             "launch_token_env": "XIAOZHI_DSH_LAUNCH_TOKEN",
             "dsh_home": str(tmp_path.resolve()),
-            "expected_version": "0.2.0-rc.2",
+            "expected_version": version,
             "allowed_presets": ["standard", "assistant-agent"],
         }
     )
@@ -110,7 +113,7 @@ def test_config_accepts_closed_deepseek_web_contract(tmp_path: Path) -> None:
     (
         ("base_url", "http://localhost:8765", "numeric-loopback"),
         ("base_url", "https://127.0.0.1:8765", "numeric-loopback"),
-        ("expected_version", "0.2.0", "0.2.0-rc.2"),
+        ("expected_version", "0.2.0", "supported DSH version"),
         ("allowed_presets", ["standard", "standard"], "unique"),
     ),
 )
@@ -289,9 +292,50 @@ def test_shared_requests_separate_socket_session_from_stable_device() -> None:
             "profile": "specialist",
             "stored_session_id": "stored-session-1",
             "binding_revision": 1,
+            "stream_progress": True,
         }
     )
     assert voice.confirmed is False
+    assert voice.stream_progress is True
+    cancellation = BridgeRequest.from_mapping(
+        {
+            "schema_version": "1.0",
+            "caller_id": "xiaozhi-backend",
+            "session_id": "socket:stop",
+            "operation": "cancel_bound_voice",
+            "device_id": "esp32-s3",
+            "host": "hermes",
+            "profile": "specialist",
+            "stored_session_id": "stored-session-1",
+            "binding_revision": 1,
+        }
+    )
+    assert cancellation.input is None
+    with pytest.raises(BridgeContractError, match="only permitted"):
+        BridgeRequest.from_mapping(
+            {
+                "schema_version": "1.0",
+                "caller_id": "xiaozhi-backend",
+                "session_id": "socket:list",
+                "operation": "list_profiles",
+                "stream_progress": True,
+            }
+        )
+    with pytest.raises(BridgeContractError, match="expected binding"):
+        BridgeRequest.from_mapping(
+            {
+                "schema_version": "1.0",
+                "caller_id": "xiaozhi-backend",
+                "session_id": "socket:stop",
+                "operation": "cancel_bound_voice",
+                "device_id": "esp32-s3",
+                "input": "must be forbidden",
+                "host": "hermes",
+                "profile": "specialist",
+                "stored_session_id": "stored-session-1",
+                "binding_revision": 1,
+            }
+        )
     with pytest.raises(BridgeContractError, match="expected binding"):
         BridgeRequest.from_mapping(
             {

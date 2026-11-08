@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -36,6 +37,55 @@ def receiver(*chunks: bytes):
         return messages.pop(0)
 
     return receive
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["idle", "total", "disconnect"])
+async def test_interrupted_upload_cleans_partial_and_allows_manual_retry(tmp_path, mode):
+    store = AttachmentStore(tmp_path)
+    grant = await store.prepare(request_id="interrupted", binding=binding())
+    calls = 0
+
+    async def receive():
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return {"type": "http.request", "body": b"partial", "more_body": True}
+        if mode == "disconnect":
+            return {"type": "http.disconnect"}
+        if mode == "idle":
+            await asyncio.Event().wait()
+        await asyncio.sleep(0.01)
+        return {"type": "http.request", "body": b"x", "more_body": True}
+
+    with pytest.raises(AttachmentError) as error:
+        await store.upload(token=grant.token, name="note.txt", declared_media_type="text/plain",
+                           receive=receive, content_length=None,
+                           timeout_seconds=0.15 if mode == "total" else 2,
+                           idle_timeout_seconds=1 if mode == "total" else 0.05)
+    assert error.value.status_code == (499 if mode == "disconnect" else 408)
+    assert list(tmp_path.iterdir()) == []
+    # Recovery is explicit; the store never replays a request itself.
+    record = await store.upload(token=grant.token, name="note.txt", declared_media_type="text/plain",
+                                receive=receiver(b"retry"), content_length=5)
+    assert record.path.read_bytes() == b"retry"
+
+
+@pytest.mark.asyncio
+async def test_idle_deadline_is_per_read_and_default_timeout_is_preserved(tmp_path):
+    import inspect
+    assert inspect.signature(AttachmentStore.upload).parameters["timeout_seconds"].default == 120
+    assert inspect.signature(AttachmentStore.upload).parameters["idle_timeout_seconds"].default is None
+    store = AttachmentStore(tmp_path)
+    grant = await store.prepare(request_id="slow-progress", binding=binding())
+    chunks = receiver(*([b"x"] * 8))
+    async def receive():
+        await asyncio.sleep(0.04)
+        return await chunks()
+    record = await store.upload(token=grant.token, name="note.txt", declared_media_type="text/plain",
+                                receive=receive, content_length=8, timeout_seconds=3,
+                                idle_timeout_seconds=0.25)
+    assert record.path.read_bytes() == b"xxxxxxxx"
 
 
 @pytest.mark.asyncio

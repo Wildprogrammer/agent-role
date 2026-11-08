@@ -98,6 +98,7 @@ class XiaoAiAdapter(Protocol):
         device_id: str,
         prompt: str,
         attachments: Sequence[Mapping[str, object]] = (),
+        expected_binding: AttachmentBinding | None = None,
     ) -> Mapping[str, object]: ...
 
     async def close(self) -> None: ...
@@ -641,6 +642,7 @@ class XiaoAiMcpGateway:
                         attachments=tuple(
                             item.to_bridge_mapping() for item in attachment_records
                         ),
+                        expected_binding=attachment_binding,
                     )
                 else:
                     response = await self._adapter.dispatch_bound(

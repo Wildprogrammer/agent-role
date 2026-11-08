@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#070e13"><title>灵溪 · 手机终端</title>
+  <link rel="stylesheet" href="/static/mobile.css">
+</head>
+<body>
+  <form id="login" class="login">
+    <span class="eyebrow">LINGXI / MOBILE</span><h1>你好，灵溪</h1>
+    <p>用这台手机看、听、说。连接电脑上的智能体。</p>
+    <label>连接密码<input id="password" type="password" autocomplete="current-password" required maxlength="256"></label>
+    <button type="submit">连接灵溪</button><p id="login-error" role="alert"></p>
+  </form>
+  <main id="app" hidden>
+    <header><span class="eyebrow">灵溪 · 手机终端</span><button id="mute" class="quiet" aria-pressed="false" disabled title="仅文字模式会跳过语音合成">静音 / 仅文字</button><button id="reconnect" class="quiet" hidden>重新连接</button><button id="fullscreen" class="quiet">全屏</button><button id="logout" class="quiet">退出</button></header>
+    <section class="stage" aria-label="灵溪表情">
+      <div class="face" id="face" data-state="idle"><i></i><i></i></div>
+      <div class="status"><span id="mic-indicator" hidden>● </span><span id="state">准备好了</span></div>
+      <p id="binding-label">请选择智能体和会话</p>
+    </section>
+    <section class="dialogue" aria-live="polite"><article id="question"></article><article id="answer"></article></section>
+    <section class="composer">
+      <div id="photo-preview" hidden><img id="preview" alt="待发送照片"><button id="remove-photo">移除照片</button></div>
+      <label class="photo-option"><input id="compress-photo" type="checkbox" checked> 压缩大图后上传（取消勾选发送原图）</label>
+      <small>大于1 MiB的图片可缩至最长1600像素JPEG，原照片不变。</small>
+      <div id="upload-panel" hidden><progress id="upload-progress" max="100" value="0" aria-label="照片上传进度"></progress><span id="upload-status" role="status"></span><button id="cancel-upload">取消上传</button></div>
+      <div class="entry"><textarea id="text" rows="2" maxlength="8000" placeholder="问点什么，也可以拍照后提问……" aria-label="问题"></textarea><button id="send">发送</button></div>
+      <div class="controls"><button id="mic" class="primary">点击说话</button><button id="stop">停止</button><button id="camera">拍照 / 图片</button><input id="file" type="file" accept="image/jpeg,image/png,image/webp" capture="environment" hidden><label class="volume">音量<input id="volume" type="range" min="0" max="1" value="0.8" step="0.05"></label></div>
+      <p id="notice" role="status">首次使用请允许麦克风和相机。再次点击结束收音并发送。</p>
+    </section>
+    <details id="settings" class="settings"><summary>智能体与会话</summary><div class="selectors"><label>智能体<select id="agents"></select></label><button id="refresh">刷新列表</button><label>已有会话<select id="sessions"></select></label><button id="bind">使用此会话</button></div><p>选好智能体和已有会话后，请点击“使用此会话”。显示“已连接会话”后即可发送；仅改变下拉选项不会切换聊天目标。</p></details>
+  </main>
+  <script src="/static/mobile.js"></script>
+</body></html>

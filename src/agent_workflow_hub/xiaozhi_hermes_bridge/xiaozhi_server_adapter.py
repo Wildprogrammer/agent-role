@@ -8,10 +8,12 @@ import os
 import re
 import time
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Protocol, cast
+
+from .attachments import AttachmentBinding
 
 
 _CALLER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
@@ -41,6 +43,7 @@ class BridgeClient(Protocol):
         host: str | None = None,
         binding_revision: int | None = None,
         attachments: Sequence[Mapping[str, object]] | None = None,
+        on_progress: Callable[[str], Awaitable[None] | None] | None = None,
     ) -> Mapping[str, object]: ...
 
 
@@ -155,6 +158,7 @@ class BridgeProcessClient:
         host: str | None = None,
         binding_revision: int | None = None,
         attachments: Sequence[Mapping[str, object]] | None = None,
+        on_progress: Callable[[str], Awaitable[None] | None] | None = None,
     ) -> Mapping[str, object]:
         request: dict[str, object] = {
             "schema_version": "1.0",
@@ -182,6 +186,8 @@ class BridgeProcessClient:
             request["binding_revision"] = binding_revision
         if attachments:
             request["attachments"] = [dict(item) for item in attachments]
+        if on_progress is not None:
+            request["stream_progress"] = True
         payload = json.dumps(
             request, ensure_ascii=False, separators=(",", ":"), allow_nan=False
         ).encode("utf-8") + b"\n"
@@ -195,10 +201,60 @@ class BridgeProcessClient:
             try:
                 process.stdin.write(payload)
                 await process.stdin.drain()
-                line = await asyncio.wait_for(
-                    process.stdout.readline(),
-                    timeout=self._settings.response_timeout_seconds,
-                )
+                while True:
+                    line = await asyncio.wait_for(
+                        process.stdout.readline(),
+                        timeout=self._settings.response_timeout_seconds,
+                    )
+                    if not line:
+                        break
+                    if len(line) > self._settings.max_line_bytes:
+                        await self._stop_locked()
+                        raise XiaozhiAdapterError(
+                            "bridge response exceeds the line-size limit"
+                        )
+                    try:
+                        decoded = json.loads(line.decode("utf-8"))
+                    except (UnicodeDecodeError, json.JSONDecodeError):
+                        await self._stop_locked()
+                        raise XiaozhiAdapterError(
+                            "bridge returned invalid UTF-8 JSON"
+                        ) from None
+                    if not isinstance(decoded, Mapping) or not all(
+                        type(key) is str for key in decoded
+                    ):
+                        await self._stop_locked()
+                        raise XiaozhiAdapterError(
+                            "bridge response must be a JSON object"
+                        )
+                    if (
+                        decoded.get("operation") != operation
+                        or decoded.get("session_id") != session_id
+                    ):
+                        await self._stop_locked()
+                        raise XiaozhiAdapterError(
+                            "bridge returned a response for a different request"
+                        )
+                    if decoded.get("status") != "progress":
+                        return cast(Mapping[str, object], decoded)
+                    progress_text = decoded.get("output")
+                    if operation != "dispatch_bound_voice" or type(progress_text) is not str:
+                        await self._stop_locked()
+                        raise XiaozhiAdapterError("bridge returned invalid progress")
+                    if on_progress is not None:
+                        try:
+                            progress_result = on_progress(cast(str, progress_text))
+                            if isinstance(progress_result, Awaitable):
+                                await progress_result
+                        except Exception as exc:
+                            await self._stop_locked()
+                            raise XiaozhiAdapterError(
+                                "bridge progress consumer failed: "
+                                f"{type(exc).__name__}"
+                            ) from None
+            except asyncio.CancelledError:
+                await asyncio.shield(self._stop_locked())
+                raise
             except (BrokenPipeError, ConnectionError, asyncio.TimeoutError) as exc:
                 await self._stop_locked()
                 raise XiaozhiAdapterError(
@@ -207,19 +263,6 @@ class BridgeProcessClient:
             if not line:
                 await self._stop_locked()
                 raise XiaozhiAdapterError("bridge process closed without a response")
-            if len(line) > self._settings.max_line_bytes:
-                await self._stop_locked()
-                raise XiaozhiAdapterError("bridge response exceeds the line-size limit")
-            try:
-                decoded = json.loads(line.decode("utf-8"))
-            except (UnicodeDecodeError, json.JSONDecodeError):
-                await self._stop_locked()
-                raise XiaozhiAdapterError("bridge returned invalid UTF-8 JSON") from None
-            if not isinstance(decoded, Mapping) or not all(
-                type(key) is str for key in decoded
-            ):
-                raise XiaozhiAdapterError("bridge response must be a JSON object")
-            return cast(Mapping[str, object], decoded)
 
     async def _stop_locked(self) -> None:
         process = self._process
@@ -254,6 +297,8 @@ class PendingDispatch:
     idempotency_key: str | None = None
     binding_revision: int | None = None
     state: str = "prepared"
+    data_complete: bool = False
+    cancel_complete: bool = False
 
 
 class XiaozhiHermesAdapter:
@@ -263,10 +308,12 @@ class XiaozhiHermesAdapter:
         self,
         client: BridgeClient,
         *,
+        control_client: BridgeClient | None = None,
         max_input_chars: int = 8_000,
         max_pending_sessions: int = _MAX_PENDING_SESSIONS,
     ) -> None:
         self._client = client
+        self._control_client = control_client or client
         self._max_input_chars = max_input_chars
         self._max_pending_sessions = max_pending_sessions
         self._pending: dict[str, PendingDispatch] = {}
@@ -304,6 +351,16 @@ class XiaozhiHermesAdapter:
         ]
         for pending_session_id in prepared_sessions:
             self._pending.pop(pending_session_id, None)
+
+    async def _mark_outcome_unknown(
+        self, session_id: str, operation_id: str
+    ) -> None:
+        async with self._state_lock:
+            current = self._pending.get(session_id)
+            if current is not None and current.operation_id == operation_id:
+                self._pending[session_id] = replace(
+                    current, state="outcome_unknown"
+                )
 
     async def list_profiles(self, session_id: str) -> Mapping[str, object]:
         return await self._client.request("list_profiles", session_id=session_id)
@@ -514,6 +571,8 @@ class XiaozhiHermesAdapter:
         device_id: str,
         prompt: str,
         attachments: Sequence[Mapping[str, object]] = (),
+        expected_binding: AttachmentBinding | None = None,
+        on_progress: Callable[[str], Awaitable[None] | None] | None = None,
     ) -> Mapping[str, object]:
         """Send ordinary speech to the current binding without faking confirmation."""
 
@@ -529,6 +588,18 @@ class XiaozhiHermesAdapter:
         profile = binding.get("profile")
         stored_session_id = binding.get("stored_session_id")
         binding_revision = binding.get("binding_revision")
+        if expected_binding is not None and expected_binding != AttachmentBinding(
+            device_id=device_id,
+            host=host,
+            profile=profile,
+            stored_session_id=stored_session_id,
+            binding_revision=binding_revision,
+        ):
+            return {
+                "status": "rejected",
+                "operation": "dispatch_bound_voice",
+                "message": "会话绑定已变化，请重新确认照片和提问的目标会话。",
+            }
         if (
             host not in {"hermes", "deepseek-harness"}
             or type(profile) is not str
@@ -580,17 +651,18 @@ class XiaozhiHermesAdapter:
             }
             if attachments:
                 dispatch_args["attachments"] = attachments
+            if on_progress is not None:
+                dispatch_args["on_progress"] = on_progress
             response = await self._client.request(
-                "dispatch_bound_voice",
-                session_id=session_id,
-                **dispatch_args,
+                "dispatch_bound_voice", session_id=session_id, **dispatch_args
             )
+        except asyncio.CancelledError:
+            await asyncio.shield(
+                self._mark_outcome_unknown(session_id, submitting.operation_id)
+            )
+            raise
         except Exception:
-            async with self._state_lock:
-                if self._pending.get(session_id) == submitting:
-                    self._pending[session_id] = replace(
-                        submitting, state="outcome_unknown"
-                    )
+            await self._mark_outcome_unknown(session_id, submitting.operation_id)
             raise
 
         response_status = response.get("status")
@@ -602,18 +674,118 @@ class XiaozhiHermesAdapter:
             "reconciliation_required",
         }
         async with self._state_lock:
-            if self._pending.get(session_id) == submitting:
-                if response_status in uncertain:
+            current = self._pending.get(session_id)
+            if (
+                current is not None
+                and current.operation_id == submitting.operation_id
+            ):
+                if current.state == "cancelling":
+                    if current.cancel_complete:
+                        self._pending.pop(session_id, None)
+                    else:
+                        self._pending[session_id] = replace(
+                            current, data_complete=True
+                        )
+                elif current.state != "submitting":
+                    pass
+                elif response_status in uncertain:
                     self._pending[session_id] = replace(
-                        submitting, state=cast(str, response_status)
+                        current, state=cast(str, response_status)
                     )
                 elif type(response_status) is str:
                     self._pending.pop(session_id, None)
                 else:
                     self._pending[session_id] = replace(
-                        submitting, state="outcome_unknown"
+                        current, state="outcome_unknown"
                     )
         return response
+
+    async def cancel_active_for_device(
+        self, session_id: str, *, device_id: str
+    ) -> Mapping[str, object]:
+        """Cancel the exact active host turn through an independent stdio client."""
+
+        async with self._state_lock:
+            match = self._pending_for_device_locked(device_id)
+            if match is None:
+                return {
+                    "schema_version": "1.0",
+                    "status": "ok",
+                    "operation": "cancel_bound_voice",
+                    "session_id": session_id,
+                    "device_id": device_id,
+                    "cancelled": False,
+                }
+            pending_session_id, pending = match
+            if pending.state == "cancelling":
+                return {
+                    "schema_version": "1.0",
+                    "status": "requested",
+                    "operation": "cancel_bound_voice",
+                    "session_id": session_id,
+                    "device_id": device_id,
+                    "cancelled": False,
+                }
+            if pending.state != "submitting":
+                raise XiaozhiAdapterError(
+                    f"active Agent operation is {pending.state}; it cannot be interrupted"
+                )
+            if (
+                pending.device_id is None
+                or pending.stored_session_id is None
+                or pending.binding_revision is None
+            ):
+                raise XiaozhiAdapterError("active Agent operation snapshot is incomplete")
+            self._pending[pending_session_id] = replace(pending, state="cancelling")
+        try:
+            response = await self._control_client.request(
+                "cancel_bound_voice",
+                session_id=session_id,
+                device_id=device_id,
+                host=pending.host,
+                profile=pending.profile,
+                stored_session_id=pending.stored_session_id,
+                binding_revision=pending.binding_revision,
+            )
+            response_status = response.get("status")
+            accepted = response_status in {"cancelled", "requested"}
+            async with self._state_lock:
+                current = self._pending.get(pending_session_id)
+                if (
+                    current is not None
+                    and current.operation_id == pending.operation_id
+                    and current.state == "cancelling"
+                ):
+                    if accepted:
+                        if current.data_complete:
+                            self._pending.pop(pending_session_id, None)
+                        else:
+                            self._pending[pending_session_id] = replace(
+                                current, cancel_complete=True
+                            )
+                    elif response_status == "rejected" and current.data_complete:
+                        self._pending.pop(pending_session_id, None)
+                    elif response_status == "rejected":
+                        self._pending[pending_session_id] = replace(
+                            current, state="submitting"
+                        )
+                    else:
+                        self._pending[pending_session_id] = replace(
+                            current, state="outcome_unknown"
+                        )
+            return response
+        except asyncio.CancelledError:
+            await asyncio.shield(
+                self._mark_outcome_unknown(
+                    pending_session_id, pending.operation_id
+                )
+            )
+            raise
+        except Exception:
+            await self._mark_outcome_unknown(
+                pending_session_id, pending.operation_id
+            )
+            raise
 
     async def _prepare_bound_lifecycle(
         self,
@@ -790,10 +962,13 @@ class XiaozhiHermesAdapter:
                 raise XiaozhiAdapterError(
                     "pending action is not a shared Hermes operation"
                 )
+        except asyncio.CancelledError:
+            await asyncio.shield(
+                self._mark_outcome_unknown(session_id, pending.operation_id)
+            )
+            raise
         except Exception:
-            async with self._state_lock:
-                if self._pending.get(session_id) == pending:
-                    self._pending[session_id] = replace(pending, state="outcome_unknown")
+            await self._mark_outcome_unknown(session_id, pending.operation_id)
             raise
         response_status = response.get("status")
         uncertain = {
@@ -972,6 +1147,10 @@ class XiaozhiHermesAdapter:
         close = getattr(self._client, "close", None)
         if close is not None:
             await close()
+        if self._control_client is not self._client:
+            close_control = getattr(self._control_client, "close", None)
+            if close_control is not None:
+                await close_control()
 
 
 def adapter_from_environment(
@@ -980,6 +1159,7 @@ def adapter_from_environment(
     settings = BridgeProcessSettings.from_environment(environment)
     return XiaozhiHermesAdapter(
         BridgeProcessClient(settings, environment=environment),
+        control_client=BridgeProcessClient(settings, environment=environment),
     )
 
 

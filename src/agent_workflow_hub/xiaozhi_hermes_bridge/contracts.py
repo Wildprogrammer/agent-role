@@ -14,6 +14,7 @@ from urllib.parse import urlsplit
 _PROFILE_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 _SESSION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _ENV_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
+SUPPORTED_DSH_VERSIONS = ("0.2.0-rc.2", "0.2.1-rc.5")
 _IDEMPOTENCY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$")
 _ATTACHMENT_ID_RE = re.compile(r"^att_[a-f0-9]{32}$")
 _SHA256_RE = re.compile(r"^[a-f0-9]{64}$")
@@ -43,6 +44,7 @@ _OPERATIONS = frozenset(
         "unbind_session",
         "dispatch_shared",
         "dispatch_bound_voice",
+        "cancel_bound_voice",
         "create_session",
         "compress_session",
     )
@@ -327,8 +329,11 @@ class DshWebConfig:
         if not dsh_home.is_absolute():
             raise BridgeContractError("dsh_home must be absolute")
         version = _text(value["expected_version"], name="expected_version")
-        if version != "0.2.0-rc.2":
-            raise BridgeContractError("expected_version must be 0.2.0-rc.2")
+        if version not in SUPPORTED_DSH_VERSIONS:
+            supported = ", ".join(SUPPORTED_DSH_VERSIONS)
+            raise BridgeContractError(
+                f"expected_version must be a supported DSH version: {supported}"
+            )
         raw_presets = value["allowed_presets"]
         if type(raw_presets) is not list or not raw_presets:
             raise BridgeContractError("allowed_presets must be a non-empty array")
@@ -498,6 +503,7 @@ class BridgeRequest:
         "unbind_session",
         "dispatch_shared",
         "dispatch_bound_voice",
+        "cancel_bound_voice",
         "create_session",
         "compress_session",
     ]
@@ -511,6 +517,7 @@ class BridgeRequest:
     host: Literal["hermes", "deepseek-harness"] | None = None
     binding_revision: int | None = None
     attachments: tuple[BridgeAttachment, ...] = ()
+    stream_progress: bool = False
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, object]) -> BridgeRequest:
@@ -528,6 +535,7 @@ class BridgeRequest:
                 "host",
                 "binding_revision",
                 "attachments",
+                "stream_progress",
             },
             name="bridge request",
         )
@@ -552,6 +560,13 @@ class BridgeRequest:
         host = value.get("host")
         binding_revision = value.get("binding_revision")
         raw_attachments = value.get("attachments")
+        stream_progress = value.get("stream_progress", False)
+        if "stream_progress" in value:
+            stream_progress = _boolean(stream_progress, name="stream_progress")
+            if operation != "dispatch_bound_voice":
+                raise BridgeContractError(
+                    "stream_progress is only permitted for dispatch_bound_voice"
+                )
         if raw_attachments is None:
             attachments: tuple[BridgeAttachment, ...] = ()
         else:
@@ -576,6 +591,7 @@ class BridgeRequest:
             "bind_session",
             "dispatch_shared",
             "dispatch_bound_voice",
+            "cancel_bound_voice",
             "create_session",
             "compress_session",
         }:
@@ -696,25 +712,35 @@ class BridgeRequest:
                     minimum=0,
                     maximum=2_147_483_647,
                 )
-        elif operation in {"dispatch_shared", "dispatch_bound_voice"}:
+        elif operation in {
+            "dispatch_shared",
+            "dispatch_bound_voice",
+            "cancel_bound_voice",
+        }:
+            cancelling = operation == "cancel_bound_voice"
             if (
                 device_id is None
-                or prompt is None
+                or (prompt is None and not cancelling)
+                or (prompt is not None and cancelling)
                 or profile is None
                 or stored_session_id is None
                 or host is None
                 or binding_revision is None
                 or limit is not None
                 or idempotency_key is not None
-                or (operation == "dispatch_bound_voice" and "confirmed" in value)
+                or (
+                    operation in {"dispatch_bound_voice", "cancel_bound_voice"}
+                    and "confirmed" in value
+                )
             ):
                 raise BridgeContractError(
-                    f"{operation} requires device_id, input, and an expected binding"
+                    f"{operation} requires device_id and an expected binding"
                 )
             device_id = _text(device_id, name="device_id")
             if _SESSION_RE.fullmatch(device_id) is None:
                 raise BridgeContractError("device_id contains unsupported characters")
-            prompt = _text(prompt, name="input")
+            if prompt is not None:
+                prompt = _text(prompt, name="input")
             confirmed = (
                 _boolean(confirmed, name="confirmed")
                 if operation == "dispatch_shared"
@@ -827,6 +853,7 @@ class BridgeRequest:
                     "unbind_session",
                     "dispatch_shared",
                     "dispatch_bound_voice",
+                    "cancel_bound_voice",
                     "create_session",
                     "compress_session",
                 ],
@@ -842,6 +869,7 @@ class BridgeRequest:
             host=cast('Literal["hermes", "deepseek-harness"] | None', host),
             binding_revision=cast("int | None", binding_revision),
             attachments=attachments,
+            stream_progress=cast(bool, stream_progress),
         )
 
 

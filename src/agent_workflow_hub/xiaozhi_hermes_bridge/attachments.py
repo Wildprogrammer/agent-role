@@ -203,6 +203,7 @@ class AttachmentStore:
         receive: Any,
         content_length: int | None,
         timeout_seconds: int = 120,
+        idle_timeout_seconds: float | None = None,
     ) -> StagedAttachment:
         clean_name, media_type, kind = _classify_name(name, declared_media_type)
         grant = await self._reserve_grant(token)
@@ -233,7 +234,11 @@ class AttachmentStore:
                     if remaining <= 0:
                         raise AttachmentError("上传超时。", status_code=408)
                     try:
-                        message = await asyncio.wait_for(receive(), timeout=remaining)
+                        read_timeout = (
+                            min(remaining, idle_timeout_seconds)
+                            if idle_timeout_seconds is not None else remaining
+                        )
+                        message = await asyncio.wait_for(receive(), timeout=read_timeout)
                     except asyncio.TimeoutError:
                         raise AttachmentError("上传超时。", status_code=408) from None
                     message_type = message.get("type")

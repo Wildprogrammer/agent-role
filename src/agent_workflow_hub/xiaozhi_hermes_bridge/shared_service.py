@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -29,7 +29,10 @@ class ConversationGateway(Protocol):
         stored_session_id: str,
         text: str,
         attachments: tuple[BridgeAttachment, ...] = (),
+        on_progress: Callable[[str], None] | None = None,
     ) -> SharedTurnResult: ...
+
+    def cancel_session(self, *, profile: str, stored_session_id: str) -> str: ...
 
     def create_session(
         self, *, profile: str, idempotency_key: str
@@ -68,7 +71,7 @@ class LifecycleBindingError(RuntimeError):
         runtime_session_id: str,
         old_stored_session_id: str,
         old_binding_revision: int,
-    ) -> None:
+    ) -> str:
         super().__init__(message)
         self.status = status
         self.host = host
@@ -86,20 +89,27 @@ class SharedConversationService:
         self,
         config: BridgeConfig,
         store: BindingStore,
-        gateway: ConversationGateway,
+        gateway: ConversationGateway | None,
         *,
         gateways: Mapping[str, ConversationGateway] | None = None,
     ) -> None:
         self._config = config
         self._store = store
-        self._gateways: dict[str, ConversationGateway] = {"hermes": gateway}
+        self._gateways: dict[str, ConversationGateway] = {}
+        if gateway is not None:
+            self._gateways["hermes"] = gateway
         if gateways is not None:
             self._gateways.update(gateways)
 
     def _gateway(self, host: str) -> ConversationGateway:
         gateway = self._gateways.get(host)
         if gateway is None:
-            raise BridgeRejected(f"{host} is not configured")
+            configured = host == "hermes" or (
+                host == "deepseek-harness"
+                and self._config.deepseek_harness is not None
+            )
+            state = "unavailable" if configured else "not configured"
+            raise BridgeRejected(f"{host} is {state}")
         return gateway
 
     def _profile_allowed(self, host: str, profile: str) -> bool:
@@ -431,6 +441,7 @@ class SharedConversationService:
         expected_revision: int,
         voice_direct: bool = False,
         attachments: tuple[BridgeAttachment, ...] = (),
+        on_progress: Callable[[str], None] | None = None,
     ) -> SharedTurnResult:
         with self._store.device_operation(device_id):
             return self._send_locked(
@@ -443,6 +454,7 @@ class SharedConversationService:
                 expected_revision=expected_revision,
                 voice_direct=voice_direct,
                 attachments=attachments,
+                on_progress=on_progress,
             )
 
     def _send_locked(
@@ -457,6 +469,7 @@ class SharedConversationService:
         expected_revision: int,
         voice_direct: bool = False,
         attachments: tuple[BridgeAttachment, ...] = (),
+        on_progress: Callable[[str], None] | None = None,
     ) -> SharedTurnResult:
         binding = self._confirmed_binding(
             device_id=device_id,
@@ -473,17 +486,48 @@ class SharedConversationService:
         if len(clean_text) > self._config.max_input_chars:
             raise BridgeRejected("input exceeds max_input_chars")
         gateway = self._gateway(binding.host)
+        progress_args = (
+            {"on_progress": on_progress} if on_progress is not None else {}
+        )
         if attachments:
             return gateway.send_to_session(
                 profile=binding.profile,
                 stored_session_id=binding.stored_session_id,
                 text=clean_text,
                 attachments=attachments,
+                **progress_args,
             )
         return gateway.send_to_session(
             profile=binding.profile,
             stored_session_id=binding.stored_session_id,
             text=clean_text,
+            **progress_args,
+        )
+
+    def cancel_bound_voice(
+        self,
+        *,
+        device_id: str,
+        expected_host: str,
+        expected_profile: str,
+        expected_stored_session_id: str,
+        expected_revision: int,
+    ) -> None:
+        """Cancel only the exact in-flight bound turn represented by the snapshot."""
+
+        binding = self._store.get(device_id)
+        if binding is None:
+            raise BridgeRejected("device is not bound to an agent conversation")
+        if (
+            binding.host != expected_host
+            or binding.profile != expected_profile
+            or binding.stored_session_id != expected_stored_session_id
+            or binding.revision != expected_revision
+        ):
+            raise BridgeRejected("device binding changed before cancellation")
+        return self._gateway(binding.host).cancel_session(
+            profile=binding.profile,
+            stored_session_id=binding.stored_session_id,
         )
 
     @staticmethod

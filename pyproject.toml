@@ -18,7 +18,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+mobile = ["aiohttp>=3.13,<4"]
 dev = [
+  "aiohttp>=3.13,<4",
   "jsonschema>=4.23,<5",
   "openai>=1,<3",
   "Pillow==12.3.0",

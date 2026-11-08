@@ -7,8 +7,8 @@
   "required": ["schema_version", "status"],
   "properties": {
     "schema_version": {"const": "1.0"},
-    "status": {"enum": ["ok", "simulated", "completed", "pending", "failed", "cancelled", "interrupted", "waiting_for_approval", "rejected", "outcome_unknown", "conflict", "partial_failure", "reconciliation_required", "error"]},
-    "operation": {"enum": ["list_agents", "list_profiles", "switch_profile", "dispatch", "list_sessions", "bind_session", "show_binding", "unbind_session", "dispatch_shared", "dispatch_bound_voice", "create_session", "compress_session"]},
+    "status": {"enum": ["ok", "simulated", "progress", "completed", "pending", "requested", "failed", "cancelled", "interrupted", "waiting_for_approval", "rejected", "outcome_unknown", "conflict", "partial_failure", "reconciliation_required", "error"]},
+    "operation": {"enum": ["list_agents", "list_profiles", "switch_profile", "dispatch", "list_sessions", "bind_session", "show_binding", "unbind_session", "dispatch_shared", "dispatch_bound_voice", "cancel_bound_voice", "create_session", "compress_session"]},
     "session_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"},
     "device_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"},
     "host": {"enum": ["hermes", "deepseek-harness"]},
@@ -33,6 +33,7 @@
     "sessions": {"type": "array", "items": {"type": "object"}},
     "bound": {"type": "boolean"},
     "removed": {"type": "boolean"},
+    "cancelled": {"type": "boolean"},
     "title": {"type": "string"},
     "stored_session_id": {"type": "string", "minLength": 1},
     "old_stored_session_id": {"type": "string", "minLength": 1},
@@ -56,6 +57,8 @@
     {"if": {"properties": {"operation": {"const": "dispatch"}, "status": {"enum": ["completed", "cancelled", "interrupted", "waiting_for_approval", "simulated"]}}, "required": ["operation", "status"]}, "then": {"required": ["session_id", "active_profile", "run_id"]}},
     {"if": {"properties": {"operation": {"const": "list_agents"}, "status": {"const": "ok"}}, "required": ["operation", "status"]}, "then": {"required": ["session_id", "agents"]}},
     {"if": {"properties": {"operation": {"enum": ["dispatch_shared", "dispatch_bound_voice"]}, "status": {"const": "completed"}}, "required": ["operation", "status"]}, "then": {"required": ["session_id", "device_id", "host", "stored_session_id", "runtime_session_id", "output"]}},
+    {"if": {"properties": {"operation": {"const": "dispatch_bound_voice"}, "status": {"const": "progress"}}, "required": ["operation", "status"]}, "then": {"required": ["session_id", "device_id", "host", "stored_session_id", "output"]}},
+    {"if": {"properties": {"operation": {"const": "cancel_bound_voice"}, "status": {"enum": ["cancelled", "requested"]}}, "required": ["operation", "status"]}, "then": {"required": ["session_id", "device_id", "host", "profile", "stored_session_id", "binding_revision"]}},
     {"if": {"properties": {"operation": {"const": "create_session"}, "status": {"const": "completed"}}, "required": ["operation", "status"]}, "then": {"required": ["session_id", "device_id", "host", "profile", "old_stored_session_id", "stored_session_id", "runtime_session_id"]}},
     {"if": {"properties": {"operation": {"const": "compress_session"}, "status": {"enum": ["completed", "pending"]}}, "required": ["operation", "status"]}, "then": {"required": ["session_id", "device_id", "host", "profile", "stored_session_id", "runtime_session_id", "compression_status"]}},
     {"if": {"properties": {"operation": {"enum": ["create_session", "compress_session"]}, "status": {"enum": ["conflict", "partial_failure", "reconciliation_required"]}}, "required": ["operation", "status"]}, "then": {"required": ["session_id", "device_id", "host", "profile", "old_stored_session_id", "old_binding_revision", "stored_session_id", "runtime_session_id", "error"]}}

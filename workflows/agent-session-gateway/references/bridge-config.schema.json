@@ -91,7 +91,7 @@
           "minLength": 3,
           "$comment": "The Python parser additionally requires an absolute host path."
         },
-        "expected_version": {"const": "0.2.0-rc.2"},
+        "expected_version": {"enum": ["0.2.0-rc.2", "0.2.1-rc.5"]},
         "allowed_presets": {
           "type": "array",
           "minItems": 1,

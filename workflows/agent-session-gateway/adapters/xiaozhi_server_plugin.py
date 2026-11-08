@@ -100,11 +100,298 @@ _adapter = None
 _control_runtime = None
 _control_runtime_initialized = False
 _control_runtime_lock = Lock()
+_asr_conversion_lock = Lock()
+_asr_conversion_task = None
 _PENDING_SWITCH_TTL_SECONDS = 180
 _MAX_PENDING_SWITCHES = 32
 _switch_states = {}
 _switch_generations = {}
 _switch_states_lock = Lock()
+
+
+class _StreamingVoiceProjector:
+    """Turn cumulative host text into non-repeating, bounded speech chunks."""
+
+    def __init__(self):
+        self.spoken = ""
+        self.queued = False
+        self.saw_progress = False
+
+    def feed(self, text, *, final=False):
+        self.saw_progress = True
+        target = _device_response_projection(text)
+        if not final:
+            target = target.removesuffix(_DEVICE_DETAIL_NOTICE).rstrip()
+        if self.spoken and not target.startswith(self.spoken):
+            if final and _DEVICE_DETAIL_NOTICE not in self.spoken:
+                return [self._record(_DEVICE_DETAIL_NOTICE)]
+            return []
+        remainder = target[len(self.spoken) :]
+        if not remainder:
+            return []
+        if final:
+            return [self._record(remainder)]
+        boundary = max(remainder.rfind(mark) for mark in "。！？!?；;")
+        if boundary < 0:
+            comma = max(remainder.rfind(mark) for mark in "，,")
+            if comma >= 11:
+                boundary = comma
+        if boundary < 0:
+            return []
+        return [self._record(remainder[: boundary + 1])]
+
+    def _record(self, chunk):
+        clean = chunk.strip()
+        if clean:
+            self.spoken += chunk
+            self.queued = True
+        return clean
+
+
+def _queue_streaming_speech(conn, text, *, sentence_id):
+    if not text:
+        return
+    from core.providers.tts.dto.dto import ContentType
+
+    conn.tts.tts_one_sentence(
+        conn,
+        ContentType.TEXT,
+        content_detail=text,
+        sentence_id=sentence_id,
+    )
+
+
+def _begin_streaming_voice_turn(conn):
+    generation = getattr(conn, "_lingxi_streaming_tts_generation", 0)
+    generation = generation + 1 if isinstance(generation, int) else 1
+    cancel_event = asyncio.Event()
+    sentence_id = getattr(conn, "sentence_id", None)
+    if not isinstance(sentence_id, str) or not sentence_id:
+        sentence_id = uuid.uuid4().hex
+        conn.sentence_id = sentence_id
+    conn._lingxi_streaming_tts_generation = generation
+    conn._lingxi_streaming_tts_cancel_event = cancel_event
+    return generation, cancel_event, sentence_id
+
+
+def _streaming_voice_turn_active(conn, generation, cancel_event, sentence_id):
+    return (
+        not cancel_event.is_set()
+        and getattr(conn, "_lingxi_streaming_tts_generation", None) == generation
+        and getattr(conn, "sentence_id", None) == sentence_id
+    )
+
+
+def _invalidate_streaming_voice_turn(conn):
+    cancel_event = getattr(conn, "_lingxi_streaming_tts_cancel_event", None)
+    if isinstance(cancel_event, asyncio.Event):
+        cancel_event.set()
+    generation = getattr(conn, "_lingxi_streaming_tts_generation", 0)
+    conn._lingxi_streaming_tts_generation = (
+        generation + 1 if isinstance(generation, int) else 1
+    )
+
+
+def _conversion_timeout_seconds(name, default):
+    raw = os.environ.get(name, str(default)).strip()
+    try:
+        seconds = int(raw)
+    except ValueError:
+        return default
+    return seconds if 3 <= seconds <= 60 else default
+
+
+def _invalidate_live_detection(conn):
+    conn._lingxi_wake_capture_turn = ""
+    conn._lingxi_live_detect_pending = False
+    conn._lingxi_live_detect_turn_id = ""
+
+
+async def _expire_voice_pipeline(conn, *, operation):
+    """Fail closed when ASR/TTS conversion cannot finish in bounded time."""
+
+    if getattr(conn, "_lingxi_voice_pipeline_expiring", False):
+        return
+    conn._lingxi_voice_pipeline_expiring = True
+    try:
+        try:
+            await _stop_current_speech(conn)
+        except Exception:
+            # State projection and connection shutdown must not depend on the
+            # device accepting the best-effort TTS stop frame.
+            _invalidate_streaming_voice_turn(conn)
+            try:
+                conn.clear_queues()
+            except Exception:
+                pass
+            try:
+                conn.clearSpeakStatus()
+            except Exception:
+                pass
+        _set_live_capture(conn, False)
+        _set_live_speech(conn, False)
+        _publish_control(conn, "idle", operation=operation)
+        close = getattr(conn, "close", None)
+        if close is not None:
+            await close()
+    finally:
+        conn._lingxi_voice_pipeline_expiring = False
+
+
+def _schedule_voice_pipeline_expiry(conn, *, operation):
+    loop = getattr(conn, "loop", None)
+    if loop is None or loop.is_closed():
+        return None
+    existing = getattr(conn, "_lingxi_voice_pipeline_expiry_future", None)
+    if existing is not None and not existing.done():
+        return existing
+    coroutine = _expire_voice_pipeline(conn, operation=operation)
+    try:
+        future = asyncio.run_coroutine_threadsafe(coroutine, loop)
+    except Exception:
+        coroutine.close()
+        return None
+    conn._lingxi_voice_pipeline_expiry_future = future
+
+    def consume_expiry(completed):
+        try:
+            completed.exception()
+        except Exception:
+            pass
+        if getattr(conn, "_lingxi_voice_pipeline_expiry_future", None) is completed:
+            conn._lingxi_voice_pipeline_expiry_future = None
+
+    future.add_done_callback(consume_expiry)
+    return future
+
+
+def _edge_tts_provider(tts):
+    provider_module = type(tts).__module__.lower()
+    return provider_module == "core.providers.tts.edge" or provider_module.endswith(
+        ".tts.edge"
+    )
+
+
+async def _run_shared_asr_conversion(asr, convert, timeout):
+    """Share the existing non-cancellable ASR worker guard across all channels."""
+    global _asr_conversion_task
+    with _asr_conversion_lock:
+        active = _asr_conversion_task
+        if active is not None and not active.done():
+            raise RuntimeError("asr_busy")
+        task = asyncio.create_task(convert())
+        _asr_conversion_task = task
+        asr._lingxi_asr_conversion_task = task
+
+    def release_conversion(completed):
+        global _asr_conversion_task
+        try:
+            completed.exception()
+        except (asyncio.CancelledError, Exception):
+            pass
+        with _asr_conversion_lock:
+            if _asr_conversion_task is completed:
+                _asr_conversion_task = None
+        if getattr(asr, "_lingxi_asr_conversion_task", None) is completed:
+            asr._lingxi_asr_conversion_task = None
+
+    task.add_done_callback(release_conversion)
+    done, _ = await asyncio.wait({task}, timeout=timeout)
+    if task in done:
+        return task.result()
+    raise asyncio.TimeoutError("asr_timeout")
+
+
+def _ensure_bounded_voice_converters(conn):
+    """Bound local ASR/TTS conversion without modifying pinned upstream files."""
+
+    asr = getattr(conn, "asr", None)
+    original_speech_to_text = getattr(asr, "speech_to_text", None)
+    if (
+        callable(original_speech_to_text)
+        and not getattr(asr, "_lingxi_bounded_conversion", False)
+    ):
+        timeout = _conversion_timeout_seconds("LINGXI_ASR_TIMEOUT_SECONDS", 10)
+
+        async def bounded_speech_to_text(*args, **kwargs):
+            try:
+                return await _run_shared_asr_conversion(asr,
+                    lambda: original_speech_to_text(*args, **kwargs), timeout)
+            except asyncio.TimeoutError:
+                await _expire_voice_pipeline(conn, operation="asr_timeout")
+                return "", None
+            except RuntimeError as exc:
+                if str(exc) != "asr_busy":
+                    raise
+                await _expire_voice_pipeline(conn, operation="asr_busy")
+                return "", None
+
+        asr.speech_to_text = bounded_speech_to_text
+        asr._lingxi_bounded_conversion = True
+
+    tts = getattr(conn, "tts", None)
+    original_text_to_speak = getattr(tts, "text_to_speak", None)
+    if (
+        callable(original_text_to_speak)
+        and _edge_tts_provider(tts)
+        and not getattr(tts, "_lingxi_bounded_conversion", False)
+    ):
+        timeout = _conversion_timeout_seconds("LINGXI_TTS_TIMEOUT_SECONDS", 15)
+
+        async def bounded_text_to_speak(text, output_file):
+            if getattr(conn, "_lingxi_tts_conversion_expired", False):
+                raise RuntimeError("Lingxi TTS conversion already expired")
+            try:
+                return await asyncio.wait_for(
+                    original_text_to_speak(text, output_file), timeout=timeout
+                )
+            except asyncio.TimeoutError:
+                conn._lingxi_tts_conversion_expired = True
+                if output_file:
+                    try:
+                        os.remove(output_file)
+                    except OSError:
+                        pass
+                expiry = _schedule_voice_pipeline_expiry(
+                    conn, operation="tts_timeout"
+                )
+                if expiry is None:
+                    # If the owner loop is already unavailable, still fail
+                    # closed locally so stale UI/control state is not retained.
+                    _invalidate_streaming_voice_turn(conn)
+                    _invalidate_live_detection(conn)
+                    try:
+                        conn.clear_queues()
+                    except Exception:
+                        pass
+                    try:
+                        conn.clearSpeakStatus()
+                    except Exception:
+                        pass
+                    _set_live_capture(conn, False)
+                    _set_live_speech(conn, False)
+                    _publish_control(conn, "idle", operation="tts_timeout")
+                raise RuntimeError("Lingxi TTS conversion timed out") from None
+
+        tts.text_to_speak = bounded_text_to_speak
+        tts._lingxi_bounded_conversion = True
+
+
+def _apply_voice_session_policy(conn):
+    """Keep a short post-answer follow-up window and never synthesize a farewell."""
+
+    raw = os.environ.get("LINGXI_FOLLOWUP_WINDOW_SECONDS", "12").strip()
+    try:
+        seconds = int(raw)
+    except ValueError:
+        seconds = 12
+    if not 5 <= seconds <= 120:
+        seconds = 12
+    config = getattr(conn, "config", None)
+    if isinstance(config, dict):
+        config["close_connection_no_voice_time"] = seconds
+        config["end_prompt"] = {"enable": False}
+    _ensure_bounded_voice_converters(conn)
 
 
 def _control_error_label(exc):
@@ -374,6 +661,7 @@ def _volume_available(conn):
 
 
 async def _register_control_connection(conn, device_id):
+    _apply_voice_session_policy(conn)
     runtime = _get_control_runtime()
     if runtime is None:
         return
@@ -435,6 +723,26 @@ async def _unregister_control_connection(conn):
     )
 
 
+async def _close_with_control_cleanup(conn, original_close, ws=None):
+    _invalidate_live_detection(conn)
+    unregister_cancelled = None
+    try:
+        await _unregister_control_connection(conn)
+    except asyncio.CancelledError as exc:
+        unregister_cancelled = exc
+    except Exception as exc:
+        logger = getattr(conn, "logger", None)
+        if logger is not None:
+            logger.bind(tag=__name__).warning(
+                "Lingxi control unregister failed: "
+                f"{_control_error_label(exc)}"
+            )
+    result = await original_close(conn, ws)
+    if unregister_cancelled is not None:
+        raise unregister_cancelled
+    return result
+
+
 def _touch_control_connection(conn, device_id):
     try:
         runtime = _get_control_runtime()
@@ -484,6 +792,7 @@ def _ensure_live_identity(conn):
 
 
 def _start_live_turn(conn, *, capture_active):
+    _invalidate_live_detection(conn)
     try:
         identity = _ensure_live_identity(conn)
         if identity is None:
@@ -524,6 +833,37 @@ def _set_live_capture(conn, active):
         return
 
 
+def _begin_live_detection(conn, text):
+    """Publish a wake detection immediately and reuse it for the following start."""
+
+    turn_id = _start_live_turn(conn, capture_active=False)
+    if not turn_id:
+        return ""
+    conn._lingxi_live_detect_pending = True
+    conn._lingxi_live_detect_turn_id = turn_id
+    _publish_live_question(conn, text, replace=True)
+    return turn_id
+
+
+def _begin_live_capture(conn):
+    pending_turn = getattr(conn, "_lingxi_live_detect_turn_id", "")
+    pending = getattr(conn, "_lingxi_live_detect_pending", False)
+    current_turn = _current_live_turn(conn, create=False)
+    if current_turn and current_turn == getattr(conn, "_lingxi_wake_capture_turn", ""):
+        return current_turn
+    _invalidate_live_detection(conn)
+    if pending and pending_turn and pending_turn == current_turn:
+        conn._lingxi_wake_capture_turn = current_turn
+        _set_live_capture(conn, True)
+        return current_turn
+    return _start_live_turn(conn, capture_active=True)
+
+
+def _end_live_capture(conn):
+    _invalidate_live_detection(conn)
+    _set_live_capture(conn, False)
+
+
 def _caption_question_text(text):
     if not isinstance(text, str):
         return ""
@@ -552,6 +892,7 @@ def _publish_live_question(conn, text, *, replace=True):
         value = _caption_question_text(text)
         if identity is None or not turn_id or not value:
             return
+        conn._lingxi_wake_capture_turn = ""
         runtime, device_id, generation = identity
         runtime.publish_live_question(
             device_id=device_id,
@@ -573,6 +914,7 @@ def _publish_live_answer(conn, text, *, source="agent", turn_id=""):
         value = _caption_answer_text(text)
         if identity is None or not selected_turn or not value:
             return
+        _invalidate_live_detection(conn)
         runtime, device_id, generation = identity
         runtime.publish_live_answer(
             device_id=device_id,
@@ -594,6 +936,7 @@ def _append_live_spoken_answer(conn, text, *, turn_id=""):
         value = _caption_answer_text(text)
         if identity is None or not selected_turn or not value:
             return
+        _invalidate_live_detection(conn)
         runtime, device_id, generation = identity
         runtime.append_live_spoken_answer(
             device_id=device_id,
@@ -606,6 +949,8 @@ def _append_live_spoken_answer(conn, text, *, turn_id=""):
 
 
 def _set_live_speech(conn, active):
+    if active:
+        _invalidate_live_detection(conn)
     try:
         identity = _live_identity(conn)
         if identity is None:
@@ -806,6 +1151,7 @@ def _install_control_lifecycle_hooks():
             # redact before TextMessageProcessor logs the raw JSON and establish the
             # transient turn before its listen handler starts downstream work.
             _refresh_privacy_loggers(conn)
+            _apply_voice_session_policy(conn)
             payload = None
             if isinstance(message, str):
                 try:
@@ -815,9 +1161,11 @@ def _install_control_lifecycle_hooks():
             if isinstance(payload, dict) and payload.get("type") == "listen":
                 state = payload.get("state")
                 if state == "start":
-                    _start_live_turn(conn, capture_active=True)
-                elif state in {"stop", "detect"}:
-                    _set_live_capture(conn, False)
+                    _begin_live_capture(conn)
+                elif state == "detect":
+                    _begin_live_detection(conn, payload.get("text"))
+                elif state == "stop":
+                    _end_live_capture(conn)
             return await original_handle_text(conn, message)
 
         connection_module.handleTextMessage = handle_text_message
@@ -893,10 +1241,7 @@ def _install_control_lifecycle_hooks():
                 _set_live_speech(self, False)
 
         async def close(self, ws=None):
-            try:
-                await _unregister_control_connection(self)
-            finally:
-                return await original_close(self, ws)
+            return await _close_with_control_cleanup(self, original_close, ws)
 
         ConnectionHandler.close = close
         ConnectionHandler.clearSpeakStatus = clear_speak_status
@@ -1393,17 +1738,57 @@ async def hermes_cancel_dispatch(conn):
 async def _stop_current_speech(conn):
     """Stop device playback without mutating its durable Agent binding."""
 
-    conn.close_after_chat = False
-    conn.client_abort = True
-    conn.clear_queues()
-    await conn.websocket.send(
-        json.dumps(
-            {"type": "tts", "state": "stop", "session_id": conn.session_id},
-            ensure_ascii=False,
+    _invalidate_streaming_voice_turn(conn)
+    _invalidate_live_detection(conn)
+    try:
+        try:
+            conn.close_after_chat = False
+            conn.client_abort = True
+        except Exception:
+            pass
+        try:
+            conn.clear_queues()
+        except Exception:
+            pass
+        try:
+            websocket = getattr(conn, "websocket", None)
+            if websocket is not None:
+                await websocket.send(
+                    json.dumps(
+                        {
+                            "type": "tts",
+                            "state": "stop",
+                            "session_id": conn.session_id,
+                        },
+                        ensure_ascii=False,
+                    )
+                )
+        except Exception:
+            pass
+    finally:
+        try:
+            conn.clearSpeakStatus()
+        except Exception:
+            pass
+        _set_live_capture(conn, False)
+        _set_live_speech(conn, False)
+        _publish_control(conn, "idle", operation="stop_speaking")
+
+
+async def _cancel_active_agent_turn(conn):
+    try:
+        cancel = getattr(_get_adapter(), "cancel_active_for_device", None)
+        if cancel is None:
+            return {"status": "ok", "cancelled": False}
+        return await cancel(
+            conn.session_id, device_id=_stable_device_id(conn)
         )
-    )
-    conn.clearSpeakStatus()
-    _publish_control(conn, "idle", operation="stop_speaking")
+    except XiaozhiAdapterError as exc:
+        return {
+            "status": "requested",
+            "cancelled": False,
+            "error": _control_error_label(exc),
+        }
 
 
 _STOP_SPEAKING_DESC = {
@@ -1420,9 +1805,16 @@ _STOP_SPEAKING_DESC = {
 async def lingxi_stop_speaking(conn):
     try:
         await _stop_current_speech(conn)
+        agent_cancel = await _cancel_active_agent_turn(conn)
         return ActionResponse(
             action=Action.NONE,
-            result=_json_result({"status": "stopped"}),
+            result=_json_result(
+                {
+                    "status": "requested",
+                    "playback_stop_requested": True,
+                    "agent_cancel": agent_cancel,
+                }
+            ),
             response="",
         )
     except Exception as exc:
@@ -1447,38 +1839,60 @@ async def lingxi_exit_conversation(conn):
     switch_cancelled, binding_done = _cancel_switch_for_exit(device_id)
     prepared_cancelled = 0
     cleanup_error = None
-    if binding_done is not None:
-        binding_outcome = await binding_done
-        if binding_outcome.get("status") != "cancelled_and_restored":
-            cleanup_error = XiaozhiAdapterError(
-                "exit could not verify cancellation of the in-flight Agent switch"
-            )
-    if cleanup_error is None:
-        try:
-            cancelled = await _get_adapter().cancel_prepared_for_device(
-                device_id=device_id
-            )
-            prepared_cancelled = cancelled.get("cancelled_count", 0)
-        except XiaozhiAdapterError as exc:
-            cleanup_error = exc
+    operation_error = None
+    cancelled_error = None
     try:
+        if binding_done is not None:
+            binding_outcome = await asyncio.shield(binding_done)
+            if binding_outcome.get("status") != "cancelled_and_restored":
+                cleanup_error = XiaozhiAdapterError(
+                    "exit could not verify cancellation of the in-flight Agent switch"
+                )
+        if cleanup_error is None:
+            try:
+                cancelled = await _get_adapter().cancel_prepared_for_device(
+                    device_id=device_id
+                )
+                prepared_cancelled = cancelled.get("cancelled_count", 0)
+            except XiaozhiAdapterError as exc:
+                cleanup_error = exc
+            except Exception as exc:
+                cleanup_error = XiaozhiAdapterError(
+                    f"exit prepared cleanup failed: {_control_error_label(exc)}"
+                )
         await _stop_current_speech(conn)
-        await conn.close()
-        if cleanup_error is not None:
-            return _failure(cleanup_error)
-        return ActionResponse(
-            action=Action.NONE,
-            result=_json_result(
-                {
-                    "status": "exited",
-                    "switch_cancelled": switch_cancelled,
-                    "prepared_cancelled": prepared_cancelled,
-                }
-            ),
-            response="",
-        )
+        await _cancel_active_agent_turn(conn)
+    except asyncio.CancelledError as exc:
+        cancelled_error = exc
     except Exception as exc:
-        return _failure(XiaozhiAdapterError(f"exit conversation failed: {exc}"))
+        operation_error = XiaozhiAdapterError(
+            f"exit conversation cleanup failed: {_control_error_label(exc)}"
+        )
+    finally:
+        try:
+            await conn.close()
+        except Exception as exc:
+            if operation_error is None:
+                operation_error = XiaozhiAdapterError(
+                    f"exit conversation close failed: {_control_error_label(exc)}"
+                )
+    if cancelled_error is not None:
+        raise cancelled_error
+    if operation_error is not None:
+        return _failure(operation_error)
+    if cleanup_error is not None:
+        return _failure(cleanup_error)
+    return ActionResponse(
+        action=Action.NONE,
+        result=_json_result(
+            {
+                "status": "exited",
+                "switch_cancelled": switch_cancelled,
+                "prepared_cancelled": prepared_cancelled,
+            }
+        ),
+        response="",
+    )
 
 
 _REJECT_VOLUME_DESC = {
@@ -2411,33 +2825,95 @@ _AGENT_DIRECT_DISPATCH_DESC = {
 
 @register_function("agent_dispatch_bound", _AGENT_DIRECT_DISPATCH_DESC, ToolType.SYSTEM_CTL)
 async def agent_dispatch_bound(conn, prompt):
+    cancel_event = None
     try:
+        _apply_voice_session_policy(conn)
         guard = _switch_guard(conn)
         if guard is not None:
             return guard
         _publish_live_question(conn, prompt, replace=False)
         live_turn_id = _current_live_turn(conn, create=False)
+        projector = _StreamingVoiceProjector()
+        streaming_enabled = hasattr(getattr(conn, "tts", None), "tts_one_sentence")
+        generation, cancel_event, sentence_id = _begin_streaming_voice_turn(conn)
+
+        async def on_progress(text):
+            if not _streaming_voice_turn_active(
+                conn, generation, cancel_event, sentence_id
+            ):
+                return
+            _publish_live_answer(conn, text, source="agent", turn_id=live_turn_id)
+            if not streaming_enabled:
+                return
+            conn._lingxi_live_tts_turn_id = live_turn_id
+            for chunk in projector.feed(text):
+                if not _streaming_voice_turn_active(
+                    conn, generation, cancel_event, sentence_id
+                ):
+                    return
+                _queue_streaming_speech(
+                    conn, chunk, sentence_id=sentence_id
+                )
+
         _publish_control(conn, "thinking", operation="dispatch_bound_voice")
-        result = await _get_adapter().dispatch_bound(
-            conn.session_id, device_id=_stable_device_id(conn), prompt=prompt
+        dispatch_args = {
+            "device_id": _stable_device_id(conn),
+            "prompt": prompt,
+        }
+        if streaming_enabled:
+            dispatch_args["on_progress"] = on_progress
+        result = await _get_adapter().dispatch_bound(conn.session_id, **dispatch_args)
+        turn_active = _streaming_voice_turn_active(
+            conn, generation, cancel_event, sentence_id
         )
         if result.get("status") == "completed" and isinstance(result.get("output"), str):
-            _publish_live_answer(
-                conn, result.get("output"), source="agent", turn_id=live_turn_id
-            )
-        else:
+            if turn_active:
+                _publish_live_answer(
+                    conn, result.get("output"), source="agent", turn_id=live_turn_id
+                )
+            if turn_active and streaming_enabled and projector.saw_progress:
+                for chunk in projector.feed(result.get("output"), final=True):
+                    if not _streaming_voice_turn_active(
+                        conn, generation, cancel_event, sentence_id
+                    ):
+                        break
+                    _queue_streaming_speech(
+                        conn, chunk, sentence_id=sentence_id
+                    )
+        elif turn_active:
             _publish_live_answer(
                 conn, _agent_response_text(result), source="agent", turn_id=live_turn_id
             )
-        conn._lingxi_live_tts_turn_id = live_turn_id
+        if turn_active:
+            conn._lingxi_live_tts_turn_id = live_turn_id
         _publish_control(
             conn,
             "speaking" if result.get("status") == "completed" else "success",
             operation="dispatch_bound_voice",
         )
+        if result.get("status") in {"cancelled", "interrupted"}:
+            return ActionResponse(
+                action=Action.NONE,
+                result=_json_result(result),
+                response="",
+            )
+        if not turn_active:
+            return ActionResponse(
+                action=Action.NONE,
+                result=_json_result(result),
+                response="",
+            )
+        if projector.queued:
+            return ActionResponse(
+                action=Action.NONE,
+                result=_json_result(result),
+                response="",
+            )
         return _agent_result_response(result)
     except XiaozhiAdapterError as exc:
         _publish_control(conn, "error", operation="dispatch_bound_voice")
+        if isinstance(cancel_event, asyncio.Event) and cancel_event.is_set():
+            return ActionResponse(action=Action.NONE, result="", response="")
         return _failure(exc)
 
 

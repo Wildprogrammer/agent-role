@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import os
+import stat
 import subprocess
 import tempfile
 from pathlib import Path
@@ -15,6 +16,10 @@ from pathlib import Path
 PINNED_SERVER_COMMIT = "87c6df77b0220ddbd8fc804f984f83f69f3225e5"
 KNOWN_MANAGED_SHA256 = {
     "plugins_func/functions/hermes_bridge.py": {
+        "5f09c9887bd3cdc953b765fcff876f6d1baf4743134aeb741abe93e878bbe201",
+        "ef65c802ddf35a460d3308ad9451f3b3f1df5c2ed3f3490ab2ed466e6b5a8ed1",
+        "d0e951e6b078ebaf47fa68259ed020351214334a16782206a7ab2536d172c551",
+        "a332f1d3c35875acffad9b4dbcca5a28932b8a57ad109d5030c1537318c92d00",
         "ba9b51a187f706ba8ca093ccb63d38f8584feece64a0150ba28a451451333d94",
         "e5e9d5d6ee96103a8d76cca43e699a88d75361532775c4a8dc0884bd7f4744b4",
         "72881e9bd976cf119d9fe9e3827417b1c8d3571d4ba98b37ae221e0c9e3c562c",
@@ -35,8 +40,12 @@ KNOWN_MANAGED_SHA256 = {
         "7b735d295c660c82c513b3da2a82bd419b591d127f2c1064d5d6910c25c645bf",
         "461ba3800f1fb6d530073e3e7aa857a453be618c413c812c2fd2ae75cd59d407",
         "3bc08c5cd983494811ad0e87331516a2eb8d9610492060141aba486dfc9691a9",
+        "43076f9680218439babe493a30f13840bc7eb74e5e5b08d4fb2d5f5e33472e93",
+        "f4970d1f437dcd26e748bf9d08dbb315d9df37fac84f9a0e599b4bd3ba5f20a1",
     },
     "core/providers/llm/ollama_nonstream_tools/ollama_nonstream_tools.py": {
+        "97dd1c24e021a9ab6cd3e4b0ff2225b6e9c93e4b0bcb6ae49b522e044ee37086",
+        "af630fdb26ba2c01953845da2e00eab05acc02167d1cdd3aa1172ece15306591",
         "70e2b787f1b391c4fcf0f114195cadebbdf9e07846dfc3aa261a263e29178abd",
         "f40fa8995aed43077dcb6402e6f673936d18ae5471d5e994a5b857509f58e596",
         "e16cc3c19bc3c5df1a11b6d789b7363a7591582d0e3af1d0bf710ce9c61891fe",
@@ -95,6 +104,31 @@ def _atomic_replace(target: Path, content: bytes) -> None:
             temporary.unlink(missing_ok=True)
 
 
+def _validate_managed_target(target: Path, server_source: Path) -> None:
+    """Reject escapes and Windows reparse points in managed target ancestry."""
+
+    root = server_source.resolve()
+    lexical_target = Path(os.path.abspath(target))
+    try:
+        relative = lexical_target.relative_to(root)
+    except ValueError:
+        raise InstallError("managed adapter target escapes the pinned server root") from None
+    try:
+        target.resolve(strict=False).relative_to(root)
+    except ValueError:
+        raise InstallError("managed adapter target resolves outside the pinned server root") from None
+    current = root
+    for part in relative.parts:
+        current /= part
+        if not current.exists() and not current.is_symlink():
+            continue
+        metadata = os.lstat(current)
+        attributes = getattr(metadata, "st_file_attributes", 0)
+        reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+        if current.is_symlink() or attributes & reparse_flag:
+            raise InstallError("managed adapter target uses a reparse point")
+
+
 def _install_artifacts(
     installs: tuple[tuple[Path, Path], ...],
     server_source: Path,
@@ -103,9 +137,10 @@ def _install_artifacts(
 ) -> tuple[list[dict[str, object]], bool]:
     """Validate every artifact before replacing any managed target."""
 
-    plans: list[tuple[Path, bytes, dict[str, object]]] = []
+    plans: list[tuple[Path, bytes, bytes | None, dict[str, object]]] = []
     changed = False
     for source, target in installs:
+        _validate_managed_target(target, server_source)
         if not source.is_file():
             raise InstallError("pinned server adapter directory is missing")
         if target.parent.exists() and not target.parent.is_dir():
@@ -130,15 +165,21 @@ def _install_artifacts(
             "target": str(target),
             "changed": artifact_changed,
         }
-        plans.append((target, source_bytes, artifact))
+        plans.append((target, source_bytes, target_bytes, artifact))
         changed = changed or artifact_changed
 
     if apply:
-        for target, source_bytes, artifact in plans:
+        for target, source_bytes, expected_target_bytes, artifact in plans:
             if artifact["changed"]:
+                _validate_managed_target(target, server_source)
+                current_target_bytes = target.read_bytes() if target.exists() else None
+                if current_target_bytes != expected_target_bytes:
+                    raise InstallError(
+                        f"existing adapter changed during install: {target.name}"
+                    )
                 _atomic_replace(target, source_bytes)
 
-    return [artifact for _, _, artifact in plans], changed
+    return [artifact for _, _, _, artifact in plans], changed
 
 
 def install(server_root: Path, *, apply: bool) -> dict[str, object]:
@@ -151,7 +192,11 @@ def install(server_root: Path, *, apply: bool) -> dict[str, object]:
             f"Xiaozhi server HEAD must be pinned to {PINNED_SERVER_COMMIT}"
         )
     adapter_root = Path(__file__).resolve().parents[1] / "adapters"
-    server_source = root / "main" / "xiaozhi-server"
+    server_source = (root / "main" / "xiaozhi-server").resolve()
+    try:
+        server_source.relative_to(root)
+    except ValueError:
+        raise InstallError("pinned server source escapes the Git checkout") from None
     installs = (
         (
             adapter_root / "xiaozhi_server_plugin.py",

@@ -39,6 +39,11 @@ jobs:
         run: python -m pip install --upgrade pip && python -m pip install -e ".[dev]"
       - name: Run Gateway tests
         run: python -m pytest workflows/agent-session-gateway/tests -q
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Verify mobile browser controller
+        run: node workflows/agent-session-gateway/tests/test_mobile_frontend.mjs
       - name: Validate Hub contracts
         run: workflow-hub validate "${{ github.workspace }}"
       - name: Parse managed PowerShell launcher
@@ -68,4 +73,6 @@ jobs:
         run: |
           python -m py_compile \
             workflows/agent-session-gateway/adapters/xiaozhi_server_plugin.py \
-            workflows/agent-session-gateway/adapters/ollama_nonstream_tools_llm.py
+            workflows/agent-session-gateway/adapters/ollama_nonstream_tools_llm.py \
+            src/agent_workflow_hub/xiaozhi_hermes_bridge/mobile_channel.py \
+            src/agent_workflow_hub/xiaozhi_hermes_bridge/mobile_runtime.py

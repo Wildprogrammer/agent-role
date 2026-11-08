@@ -268,6 +268,344 @@ def test_bound_dispatch_sends_once_without_forging_confirmation() -> None:
     asyncio.run(exercise())
 
 
+@pytest.mark.parametrize("changed", ["device_id", "host", "profile", "stored_session_id", "binding_revision"])
+def test_bound_dispatch_rejects_attachment_binding_drift(changed: str) -> None:
+    async def exercise() -> None:
+        client = FakeClient()
+        adapter = XiaozhiHermesAdapter(client)
+        expected = xiaozhi_server_adapter.AttachmentBinding(
+            "esp32-s3", "hermes", "research-agent", "stored-1", 1
+        )
+        expected = replace(expected, **{changed: 2 if changed == "binding_revision" else "other"})
+        result = await adapter.dispatch_bound(
+            "photo-session", device_id="esp32-s3", prompt="看看这张照片",
+            expected_binding=expected, attachments=({"attachment_id": "photo"},),
+        )
+        assert result["status"] == "rejected"
+        assert [call["operation"] for call in client.calls] == ["show_binding"]
+        assert adapter._pending == {}
+
+    asyncio.run(exercise())
+
+
+def test_bound_dispatch_retains_matching_frozen_binding() -> None:
+    async def exercise() -> None:
+        client = FakeClient()
+        adapter = XiaozhiHermesAdapter(client)
+        expected = xiaozhi_server_adapter.AttachmentBinding(
+            "esp32-s3", "hermes", "research-agent", "stored-1", 1
+        )
+        result = await adapter.dispatch_bound(
+            "photo-session", device_id="esp32-s3", prompt="看看这张照片",
+            expected_binding=expected,
+        )
+        assert result["status"] == "completed"
+        assert client.calls[-1]["binding_revision"] == expected.binding_revision
+        assert client.calls[-1]["stored_session_id"] == expected.stored_session_id
+
+    asyncio.run(exercise())
+
+
+def test_bound_dispatch_forwards_progress_and_uses_independent_cancel_client() -> None:
+    class StreamingClient(FakeClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.started = asyncio.Event()
+            self.release = asyncio.Event()
+
+        async def request(self, operation: str, **kwargs):
+            progress = kwargs.pop("on_progress", None)
+            result = await super().request(operation, **kwargs)
+            if operation == "dispatch_bound_voice":
+                assert progress is not None
+                callback_result = progress("第一句。")
+                if callback_result is not None:
+                    await callback_result
+                self.started.set()
+                await self.release.wait()
+                return {"status": "cancelled", "output": "第一句。"}
+            return result
+
+    class ControlClient(FakeClient):
+        async def request(self, operation: str, **kwargs):
+            await super().request(operation, **kwargs)
+            assert operation == "cancel_bound_voice"
+            return {"status": "cancelled", "operation": operation}
+
+    async def exercise() -> None:
+        dispatch = StreamingClient()
+        control = ControlClient()
+        adapter = XiaozhiHermesAdapter(dispatch, control_client=control)
+        progress: list[str] = []
+        task = asyncio.create_task(
+            adapter.dispatch_bound(
+                "socket-session",
+                device_id="esp32-s3",
+                prompt="长任务",
+                on_progress=progress.append,
+            )
+        )
+        await dispatch.started.wait()
+
+        cancelled = await adapter.cancel_active_for_device(
+            "stop-session", device_id="esp32-s3"
+        )
+        assert adapter._pending["socket-session"].state == "cancelling"
+        assert adapter._pending["socket-session"].cancel_complete is True
+        with pytest.raises(XiaozhiAdapterError, match="already has an Agent operation"):
+            await adapter.dispatch_bound(
+                "next-session", device_id="esp32-s3", prompt="下一轮不得抢跑"
+            )
+        dispatch.release.set()
+        result = await task
+
+        assert cancelled["status"] == "cancelled"
+        assert result["status"] == "cancelled"
+        assert progress == ["第一句。"]
+        assert [call["operation"] for call in control.calls] == [
+            "cancel_bound_voice"
+        ]
+        assert adapter._pending == {}
+
+    asyncio.run(exercise())
+
+
+def test_stdio_cancellation_discards_unread_frames_before_reuse() -> None:
+    child = r'''
+import json, sys, time
+for raw in sys.stdin:
+    request = json.loads(raw)
+    common = {
+        "schema_version": "1.0",
+        "operation": request["operation"],
+        "session_id": request["session_id"],
+    }
+    if request["operation"] == "dispatch_bound_voice":
+        print(json.dumps({**common, "status": "progress", "output": "first"}), flush=True)
+        time.sleep(30)
+        print(json.dumps({**common, "status": "completed", "output": "late"}), flush=True)
+    else:
+        print(json.dumps({**common, "status": "ok"}), flush=True)
+'''
+
+    async def exercise() -> None:
+        client = BridgeProcessClient(
+            BridgeProcessSettings(
+                command=(sys.executable, "-u", "-c", child),
+                caller_id="test-client",
+                response_timeout_seconds=35,
+            )
+        )
+        progress_seen = asyncio.Event()
+
+        def on_progress(_text: str) -> None:
+            progress_seen.set()
+
+        task = asyncio.create_task(
+            client.request(
+                "dispatch_bound_voice",
+                session_id="cancelled-session",
+                on_progress=on_progress,
+            )
+        )
+        await asyncio.wait_for(progress_seen.wait(), timeout=5)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert client._process is None
+
+        result = await client.request("list_profiles", session_id="fresh-session")
+        assert result["status"] == "ok"
+        assert result["session_id"] == "fresh-session"
+        await client.close()
+
+    asyncio.run(exercise())
+
+
+def test_stdio_rejects_a_frame_for_another_request() -> None:
+    child = r'''
+import json, sys
+request = json.loads(sys.stdin.readline())
+print(json.dumps({
+    "schema_version": "1.0",
+    "status": "ok",
+    "operation": request["operation"],
+    "session_id": "wrong-session",
+}), flush=True)
+'''
+
+    async def exercise() -> None:
+        client = BridgeProcessClient(
+            BridgeProcessSettings(
+                command=(sys.executable, "-u", "-c", child),
+                caller_id="test-client",
+                response_timeout_seconds=5,
+            )
+        )
+        with pytest.raises(XiaozhiAdapterError, match="different request"):
+            await client.request("list_profiles", session_id="expected-session")
+        assert client._process is None
+
+    asyncio.run(exercise())
+
+
+def test_cancelled_dispatch_is_retained_as_outcome_unknown() -> None:
+    class BlockingClient(FakeClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.started = asyncio.Event()
+            self.never = asyncio.Event()
+
+        async def request(self, operation: str, **kwargs):
+            result = await super().request(operation, **kwargs)
+            if operation == "dispatch_bound_voice":
+                self.started.set()
+                await self.never.wait()
+            return result
+
+    async def exercise() -> None:
+        client = BlockingClient()
+        adapter = XiaozhiHermesAdapter(client)
+        task = asyncio.create_task(
+            adapter.dispatch_bound(
+                "cancelled-socket", device_id="esp32-s3", prompt="写入中"
+            )
+        )
+        await client.started.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        pending = adapter._pending["cancelled-socket"]
+        assert pending.state == "outcome_unknown"
+        with pytest.raises(XiaozhiAdapterError, match="already has an Agent operation"):
+            await adapter.dispatch_bound(
+                "fresh-socket", device_id="esp32-s3", prompt="不得自动重放"
+            )
+
+    asyncio.run(exercise())
+
+
+def test_cancel_tombstone_waits_when_data_finishes_before_control() -> None:
+    class StreamingClient(FakeClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.started = asyncio.Event()
+            self.release = asyncio.Event()
+
+        async def request(self, operation: str, **kwargs):
+            result = await super().request(operation, **kwargs)
+            if operation == "dispatch_bound_voice":
+                self.started.set()
+                await self.release.wait()
+            return result
+
+    class DelayedControlClient(FakeClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.started = asyncio.Event()
+            self.release = asyncio.Event()
+
+        async def request(self, operation: str, **kwargs):
+            await super().request(operation, **kwargs)
+            self.started.set()
+            await self.release.wait()
+            return {"status": "requested", "operation": operation}
+
+    async def exercise() -> None:
+        data = StreamingClient()
+        control = DelayedControlClient()
+        adapter = XiaozhiHermesAdapter(data, control_client=control)
+        dispatch_task = asyncio.create_task(
+            adapter.dispatch_bound(
+                "socket-session", device_id="esp32-s3", prompt="长任务"
+            )
+        )
+        await data.started.wait()
+        cancel_task = asyncio.create_task(
+            adapter.cancel_active_for_device(
+                "stop-session", device_id="esp32-s3"
+            )
+        )
+        await control.started.wait()
+
+        data.release.set()
+        await dispatch_task
+        pending = adapter._pending["socket-session"]
+        assert pending.state == "cancelling"
+        assert pending.data_complete is True
+        with pytest.raises(XiaozhiAdapterError, match="already has an Agent operation"):
+            await adapter.dispatch_bound(
+                "next-session", device_id="esp32-s3", prompt="不得抢跑"
+            )
+
+        control.release.set()
+        cancelled = await cancel_task
+        assert cancelled["status"] == "requested"
+        assert adapter._pending == {}
+
+    asyncio.run(exercise())
+
+
+def test_unknown_cancel_outcome_retains_tombstone_after_data_finishes() -> None:
+    class DataClient(FakeClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.started = asyncio.Event()
+            self.release = asyncio.Event()
+
+        async def request(self, operation: str, **kwargs):
+            result = await super().request(operation, **kwargs)
+            if operation == "dispatch_bound_voice":
+                self.started.set()
+                await self.release.wait()
+            return result
+
+    class UnknownControlClient(FakeClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.started = asyncio.Event()
+            self.release = asyncio.Event()
+
+        async def request(self, operation: str, **kwargs):
+            await super().request(operation, **kwargs)
+            self.started.set()
+            await self.release.wait()
+            return {"status": "outcome_unknown", "operation": operation}
+
+    async def exercise() -> None:
+        data = DataClient()
+        control = UnknownControlClient()
+        adapter = XiaozhiHermesAdapter(data, control_client=control)
+        dispatch_task = asyncio.create_task(
+            adapter.dispatch_bound(
+                "socket-session", device_id="esp32-s3", prompt="长任务"
+            )
+        )
+        await data.started.wait()
+        cancel_task = asyncio.create_task(
+            adapter.cancel_active_for_device(
+                "stop-session", device_id="esp32-s3"
+            )
+        )
+        await control.started.wait()
+        data.release.set()
+        await dispatch_task
+        control.release.set()
+        result = await cancel_task
+
+        assert result["status"] == "outcome_unknown"
+        pending = adapter._pending["socket-session"]
+        assert pending.state == "outcome_unknown"
+        assert pending.data_complete is True
+        with pytest.raises(XiaozhiAdapterError, match="already has an Agent operation"):
+            await adapter.dispatch_bound(
+                "next-session", device_id="esp32-s3", prompt="不得抢跑"
+            )
+
+    asyncio.run(exercise())
+
+
 def test_bound_dispatch_is_blocked_while_lifecycle_confirmation_is_pending() -> None:
     async def exercise() -> None:
         client = FakeClient()

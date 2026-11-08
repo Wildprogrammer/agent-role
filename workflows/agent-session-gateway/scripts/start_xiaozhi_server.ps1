@@ -14,6 +14,7 @@ param(
     [string]$BridgeConfig,
     [string]$DshNode = '',
     [switch]$EnableLingxiControl,
+    [string]$LingxiMobileConfig = '',
     [ValidateRange(1024, 65535)]
     [int]$LingxiControlAdminPort = 8765,
     [ValidateRange(1024, 65535)]
@@ -124,6 +125,9 @@ foreach ($name in @(
     'XIAOZHI_HERMES_BRIDGE_CONFIG',
     'XIAOZHI_HERMES_BRIDGE_CONFIG_SHA256',
     'XIAOZHI_HERMES_CALLER_ID',
+    'LINGXI_MOBILE_CONFIG',
+    'LINGXI_MOBILE_PASSWORD',
+    'AGENT_GATEWAY_ATTACHMENT_ROOT',
     'LINGXI_CONTROL_ENABLED',
     'LINGXI_RUNTIME_CONFIG',
     'LINGXI_CONTROL_ADMIN_PORT',
@@ -140,6 +144,9 @@ foreach ($name in @(
 # Keep control credentials out of the separately managed DSH child. They are
 # restored only for the Xiaozhi server process when the control UI is enabled.
 foreach ($name in @(
+    'LINGXI_MOBILE_CONFIG',
+    'LINGXI_MOBILE_PASSWORD',
+    'AGENT_GATEWAY_ATTACHMENT_ROOT',
     'LINGXI_CONTROL_PASSWORD',
     'LINGXI_CONTROL_ADMIN_PASSWORD',
     'LINGXI_CONTROL_COMPANION_PASSWORD',
@@ -150,8 +157,9 @@ foreach ($name in @(
 
 try {
     if ($null -ne $dshConfig) {
-        if ($dshConfig.expected_version -ne '0.2.0-rc.2') {
-            throw 'DeepSeek Harness expected_version must be 0.2.0-rc.2.'
+        $supportedDshVersions = @('0.2.0-rc.2', '0.2.1-rc.5')
+        if ($dshConfig.expected_version -notin $supportedDshVersions) {
+            throw 'DeepSeek Harness expected_version is not supported.'
         }
         $dshOrigin = [Uri]$dshConfig.base_url
         if ($dshOrigin.Scheme -ne 'http' -or $dshOrigin.Host -ne '127.0.0.1' -or $dshOrigin.AbsolutePath -ne '/') {
@@ -501,11 +509,19 @@ public static class XiaozhiDshJob {
 
     Push-Location $ServerRoot
     $locationPushed = $true
+    if ($LingxiMobileConfig) {
+        if (-not [IO.Path]::IsPathFullyQualified($LingxiMobileConfig) -or -not (Test-Path -LiteralPath $LingxiMobileConfig -PathType Leaf)) {
+            throw 'LingxiMobileConfig must be an existing absolute file.'
+        }
+        $env:LINGXI_MOBILE_CONFIG = $LingxiMobileConfig
+        Set-ProcessEnvironmentValue -Name 'LINGXI_MOBILE_PASSWORD' -Value $priorEnvironment['LINGXI_MOBILE_PASSWORD']
+    }
     # Function plugins normally load lazily during a connection. Preload the
     # managed bridge so its privacy and transient-caption hooks are installed
     # before the first client text message can be logged or dispatched.
     $serverAppJson = $serverApp | ConvertTo-Json -Compress
     $serverBootstrap = (
+        "from agent_workflow_hub.xiaozhi_hermes_bridge.mobile_runtime import install_mobile_start_hook; install_mobile_start_hook(); " +
         "import plugins_func.functions.hermes_bridge; import runpy, sys; " +
         "sys.argv[0] = $serverAppJson; " +
         "runpy.run_path($serverAppJson, run_name='__main__')"

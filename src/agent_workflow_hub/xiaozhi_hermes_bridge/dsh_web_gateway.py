@@ -18,14 +18,14 @@ from urllib.parse import quote, urlsplit
 
 import httpx
 
-from .contracts import BridgeAttachment
+from .contracts import BridgeAttachment, SUPPORTED_DSH_VERSIONS
 
 from .desktop_gateway import CreatedSessionResult, SharedTurnResult
 
 
 _LOOPBACK_HOSTS = frozenset(("127.0.0.1", "::1"))
 _PRESET_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
-_SUPPORTED_VERSION = "0.2.0-rc.2"
+_DEFAULT_SUPPORTED_VERSION = SUPPORTED_DSH_VERSIONS[0]
 _OUTCOME_SENSITIVE_METHODS = frozenset(
     ("session/prompt", "session/create", "session/cancel")
 )
@@ -129,7 +129,7 @@ class DeepSeekHarnessWebGateway:
         base_url: str,
         launch_token: str,
         dsh_home: Path,
-        expected_version: str = _SUPPORTED_VERSION,
+        expected_version: str = _DEFAULT_SUPPORTED_VERSION,
         allowed_presets: tuple[str, ...] = (),
         request_timeout_seconds: float = 120.0,
         poll_interval_seconds: float = 1.0,
@@ -140,7 +140,7 @@ class DeepSeekHarnessWebGateway:
         self.base_url = validate_dsh_origin(base_url)
         if not launch_token.strip() or len(launch_token) > 4096:
             raise DshGatewayError("DSH launch token is unavailable")
-        if expected_version != _SUPPORTED_VERSION:
+        if expected_version not in SUPPORTED_DSH_VERSIONS:
             raise DshGatewayError("DSH expected version is not supported")
         installed = read_dsh_version(dsh_home)
         if installed != expected_version:
@@ -451,6 +451,7 @@ class DeepSeekHarnessWebGateway:
         stored_session_id: str,
         text: str,
         attachments: tuple[BridgeAttachment, ...] = (),
+        on_progress: Callable[[str], None] | None = None,
     ) -> SharedTurnResult:
         row = self._session_row(stored_session_id)
         if row is None or self._projection_value(row, "agentPreset") != profile:
@@ -474,16 +475,19 @@ class DeepSeekHarnessWebGateway:
                 }
             },
         )
+        last_progress = ""
         for _ in range(self._max_polls):
             try:
                 seq = self._projection_seq(stored_session_id)
-                result = self._turn_result(
-                    self._page(stored_session_id, seq), request_id=request_id
-                )
+                records = self._page(stored_session_id, seq)
+                result = self._turn_result(records, request_id=request_id)
             except DshGatewayError:
                 result = None
             if result is not None:
                 user_seq, status, output, error_code, error_message = result
+                if output and output != last_progress and on_progress is not None:
+                    last_progress = output
+                    on_progress(output)
                 public_status = _TURN_STATUS.get(status, "failed")
                 return SharedTurnResult(
                     status=public_status,
@@ -499,6 +503,58 @@ class DeepSeekHarnessWebGateway:
             "DSH prompt outcome is unknown after the polling limit",
             outcome_unknown=True,
         )
+
+    @classmethod
+    def _turn_text(
+        cls,
+        records: tuple[Mapping[str, object], ...],
+        *,
+        request_id: str,
+    ) -> str:
+        """Return the latest public assistant text for one submitted request."""
+
+        user_seq: int | None = None
+        for record in records:
+            event = cls._event(record)
+            data = event.get("data") if event is not None else None
+            source = data.get("source") if isinstance(data, Mapping) else None
+            if (
+                event is not None
+                and event.get("type") == "user/message"
+                and isinstance(source, Mapping)
+                and source.get("kind") == "user"
+                and source.get("rpcId") == request_id
+                and type(event.get("seq")) is int
+            ):
+                user_seq = cast(int, event["seq"])
+                break
+        if user_seq is None:
+            return ""
+        text = ""
+        for record in records:
+            event = cls._event(record)
+            if (
+                event is None
+                or type(event.get("seq")) is not int
+                or cast(int, event["seq"]) <= user_seq
+                or event.get("type") != "assistant/message"
+            ):
+                continue
+            data = event.get("data")
+            message = data.get("message") if isinstance(data, Mapping) else None
+            content = message.get("content") if isinstance(message, Mapping) else None
+            if not isinstance(content, list):
+                continue
+            parts = [
+                block.get("text")
+                for block in content
+                if isinstance(block, Mapping)
+                and block.get("type") == "text"
+                and type(block.get("text")) is str
+            ]
+            if parts:
+                text = "\n".join(cast(list[str], parts))
+        return text
 
     def _upload_attachment(
         self, session_id: str, attachment: BridgeAttachment
@@ -569,13 +625,26 @@ class DeepSeekHarnessWebGateway:
             runtime_session_id=session_id,
         )
 
-    def cancel_session(self, session_id: str) -> None:
+    def cancel_session(
+        self,
+        session_id: str | None = None,
+        *,
+        profile: str = "",
+        stored_session_id: str | None = None,
+    ) -> str:
+        del profile
+        target = stored_session_id or session_id
+        if type(target) is not str or not target:
+            raise DshGatewayError("DSH session id is required for cancellation")
         value = self._mapping(
-            self._rpc("session/cancel", {"request": {"sessionId": session_id}}),
+            self._rpc(
+                "session/cancel", {"request": {"sessionId": target}}
+            ),
             name="cancel result",
         )
         if value.get("accepted") is not True:
             raise DshGatewayError("DSH cancellation was not accepted")
+        return "requested"
 
     def remove_queued_item(self, *, session_id: str, item_id: str) -> None:
         value = self._mapping(

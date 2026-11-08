@@ -13,6 +13,9 @@
   let subscriptionDevice = "";
   let liveResumeToken = "";
   let liveResumeDevice = "";
+  let waitingToken = "";
+  let renewWaitAt = 0;
+  let offlineView = false;
   let liveCursor = 0;
   let liveSyncPromise = null;
   let livePollInFlight = false;
@@ -190,7 +193,7 @@
     dialogue.scrollTop = dialogue.scrollHeight;
   }
 
-  function animateText(kind, value, truncated, turnId, revision, headLength = 0, omitted = 0) {
+  function animateText(kind, value, truncated, turnId, headLength = 0, omitted = 0) {
     const node = byId(`${kind}-text`);
     const line = byId(`${kind}-line`);
     const cut = byId(`${kind}-cut`);
@@ -223,7 +226,7 @@
     const duration = Math.min(5200, Math.max(420, parts.length * (kind === "question" ? 24 : 13)));
     const step = Math.max(1, Math.ceil(parts.length / Math.max(1, duration / 16)));
     const tick = () => {
-      if (generation !== viewGeneration || turnId !== liveState.turnId || revision !== liveState.revision || liveState.privacy) return;
+      if (generation !== viewGeneration || turnId !== liveState.turnId || liveState.privacy) return;
       index = Math.min(parts.length, index + step);
       node.textContent = parts.slice(0, index).join("");
       scrollDialogueToLatest();
@@ -276,7 +279,7 @@
       liveState.revision = revision;
       if (question !== liveState.question) {
         liveState.question = question;
-        animateText("question", question, projection.question_truncated === true, nextTurn, revision);
+        animateText("question", question, projection.question_truncated === true, nextTurn);
       }
       const answerTruncated = projection.answer_truncated === true;
       const answerHeadLength = Number.isInteger(projection.answer_head_length) ? projection.answer_head_length : 0;
@@ -286,7 +289,7 @@
         liveState.answerTruncated = answerTruncated;
         liveState.answerHeadLength = answerHeadLength;
         liveState.answerOmittedCharacters = answerOmittedCharacters;
-        animateText("answer", answer, answerTruncated, nextTurn, revision, answerHeadLength, answerOmittedCharacters);
+        animateText("answer", answer, answerTruncated, nextTurn, answerHeadLength, answerOmittedCharacters);
       }
       byId("live-dialogue").hidden = !question && !answer;
     }
@@ -327,17 +330,34 @@
   async function syncLiveSubscriptionNow() {
     const eligible = !liveState.privacy && device?.online && device.connection_generation;
     const key = eligible ? `${device.device_id}\u0000${device.connection_generation}` : "";
-    if (!eligible) { if (subscription || liveResumeToken) await unsubscribeLive(); return; }
+    if (!eligible) {
+      if (subscription || liveResumeToken) await unsubscribeLive();
+      if (offlineView && !liveState.privacy && Date.now() >= renewWaitAt) {
+        const generation = viewGeneration;
+        renewWaitAt = Date.now() + 10000;
+        try {
+          const value = await lingxi.request("/api/live/wait", { method: "POST", body: {previous: waitingToken} });
+          if (value.resume_token) {
+            if (generation === viewGeneration && !liveState.privacy) waitingToken = value.resume_token;
+            else await revokeWait(value.resume_token);
+          }
+        } catch (error) {
+          if (error.code !== "not_found") throw error;
+        }
+      }
+      return;
+    }
     if (subscription && subscriptionDevice === key) return;
     if (subscription) await unsubscribeLive();
     const generation = viewGeneration;
     const initialBody = { device_id: device.device_id, connection_generation: device.connection_generation };
-    const canResume = Boolean(liveResumeToken && liveResumeDevice === key);
+    const resume = (liveResumeDevice === key && liveResumeToken) || waitingToken;
+    const canResume = Boolean(resume);
     let value;
     try {
       value = await lingxi.request("/api/live/subscribe", {
         method: "POST",
-        body: canResume ? { ...initialBody, resume_token: liveResumeToken, after: liveCursor } : initialBody,
+        body: canResume ? { ...initialBody, resume_token: resume, after: liveCursor } : initialBody,
       });
     } catch (error) {
       if (!canResume || error.code !== "resume_unavailable") throw error;
@@ -358,6 +378,7 @@
       return;
     }
     subscription = value.subscription;
+    waitingToken = "";
     subscriptionDevice = key;
     liveResumeToken = value.resume_token;
     liveResumeDevice = key;
@@ -406,6 +427,8 @@
 
   async function render(snapshot) {
     const devices = (snapshot.runtime?.devices || []).filter((item) => item?.online);
+    offlineView = devices.length === 0;
+    if (devices.length > 1) waitingToken = "";
     const nextDevice = devices.length === 1 ? devices[0] : null;
     const previousKey = device ? `${device.device_id}\u0000${device.connection_generation}` : "";
     const nextKey = nextDevice ? `${nextDevice.device_id}\u0000${nextDevice.connection_generation}` : "";
@@ -457,6 +480,8 @@
   }
 
   function showLogin() {
+    waitingToken = "";
+    renewWaitAt = 0;
     stopPolling();
     viewGeneration += 1;
     void unsubscribeLive(false);
@@ -484,7 +509,16 @@
     liveTimer = window.setInterval(() => pollLive().catch(() => {}), LIVE_POLL_MS);
   }
 
+  function revokeWait(token) {
+    return lingxi.request("/api/live/unsubscribe", {
+      method: "POST", body: {subscription: "", resume_token: token},
+    }).catch(() => {});
+  }
+
   async function setPrivacy(enabled) {
+    if (waitingToken) void revokeWait(waitingToken);
+    waitingToken = "";
+    renewWaitAt = 0;
     liveState.privacy = enabled;
     viewGeneration += 1;
     byId("companion").classList.toggle("private", enabled);
@@ -506,7 +540,6 @@
       liveState.answer,
       liveState.answerTruncated,
       liveState.turnId,
-      liveState.revision,
       liveState.answerHeadLength,
       liveState.answerOmittedCharacters,
     );

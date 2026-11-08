@@ -8,7 +8,7 @@ import hmac
 import json
 import os
 import sys
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 import re
 
@@ -17,8 +17,7 @@ from .contracts import BridgeConfig, BridgeContractError, BridgeRequest, read_co
 from .desktop_gateway import (
     DesktopGatewayError,
     HermesDesktopGateway,
-    default_discovery_paths,
-    discover_desktop_backend,
+    discover_desktop_gateway_backend,
 )
 from .dsh_web_gateway import DeepSeekHarnessWebGateway, DshGatewayError
 from .shared_service import (
@@ -47,6 +46,7 @@ _SHARED_OPERATIONS = frozenset(
         "unbind_session",
         "dispatch_shared",
         "dispatch_bound_voice",
+        "cancel_bound_voice",
         "create_session",
         "compress_session",
     )
@@ -58,7 +58,7 @@ def _validate_attachment_files(
 ) -> None:
     if not request.attachments:
         return
-    raw_root = environment.get("XIAOAI_MCP_ATTACHMENT_ROOT", "").strip()
+    raw_root = environment.get("AGENT_GATEWAY_ATTACHMENT_ROOT", environment.get("XIAOAI_MCP_ATTACHMENT_ROOT", "")).strip()
     root = Path(raw_root)
     if not root.is_absolute():
         raise BridgeRejected("attachment staging root is unavailable")
@@ -150,7 +150,7 @@ def _configure_standard_stream(stream: object, *, errors: str) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = _JsonArgumentParser(prog="agent-session-gateway")
+    parser = _JsonArgumentParser(prog="xiaozhi-hermes-bridge")
     commands = parser.add_subparsers(dest="command", required=True)
     for name in ("doctor", "simulate", "serve-stdio"):
         command = commands.add_parser(name)
@@ -310,8 +310,7 @@ def _error_response(
 
 
 def _desktop_gateway(environment: Mapping[str, str]) -> HermesDesktopGateway:
-    machine_root, lock_dir = default_discovery_paths(environment)
-    backend = discover_desktop_backend(machine_root=machine_root, lock_dir=lock_dir)
+    backend = discover_desktop_gateway_backend(environment)
     return HermesDesktopGateway(backend)
 
 
@@ -323,6 +322,10 @@ def _shared_service(
     path = state_path or default_binding_store_path(environment)
     gateways: dict[str, ConversationGateway] = {}
     try:
+        hermes_gateway = _desktop_gateway(environment)
+    except DesktopGatewayError:
+        hermes_gateway = None
+    try:
         deepseek_gateway = _deepseek_gateway(config, environment)
     except DshGatewayError:
         deepseek_gateway = None
@@ -331,7 +334,7 @@ def _shared_service(
     return SharedConversationService(
         config,
         BindingStore(path),
-        _desktop_gateway(environment),
+        hermes_gateway,
         gateways=gateways,
     )
 
@@ -360,6 +363,8 @@ def _deepseek_gateway(
 def _handle_shared_request(
     service: SharedConversationService,
     request: BridgeRequest,
+    *,
+    on_progress: Callable[[str], None] | None = None,
 ) -> dict[str, object]:
     common: dict[str, object] = {
         "schema_version": "1.0",
@@ -409,6 +414,28 @@ def _handle_shared_request(
             "removed": service.unbind(
                 request.device_id, expected_revision=request.binding_revision
             ),
+        }
+    if request.operation == "cancel_bound_voice":
+        assert (
+            request.host is not None
+            and request.profile is not None
+            and request.stored_session_id is not None
+            and request.binding_revision is not None
+        )
+        cancellation_status = service.cancel_bound_voice(
+            device_id=request.device_id,
+            expected_host=request.host,
+            expected_profile=request.profile,
+            expected_stored_session_id=request.stored_session_id,
+            expected_revision=request.binding_revision,
+        )
+        return {
+            **common,
+            "status": cancellation_status,
+            "host": request.host,
+            "profile": request.profile,
+            "stored_session_id": request.stored_session_id,
+            "binding_revision": request.binding_revision,
         }
     if request.operation == "create_session":
         assert (
@@ -511,6 +538,8 @@ def _handle_shared_request(
     }
     if request.attachments:
         send_args["attachments"] = request.attachments
+    if on_progress is not None:
+        send_args["on_progress"] = on_progress
     turn = service.send(**send_args)
     return {
         **common,
@@ -617,7 +646,28 @@ def _serve_stdio(
             if request.operation in _SHARED_OPERATIONS:
                 if shared_service is None:
                     shared_service = _shared_service(config, environment, None)
-                response = _handle_shared_request(shared_service, request)
+                progress = None
+                if (
+                    request.operation == "dispatch_bound_voice"
+                    and request.stream_progress
+                ):
+                    def progress(text: str) -> None:
+                        _write_bounded_response(
+                            {
+                                "schema_version": "1.0",
+                                "status": "progress",
+                                "operation": request.operation,
+                                "session_id": request.session_id,
+                                "device_id": request.device_id,
+                                "host": request.host,
+                                "stored_session_id": request.stored_session_id,
+                                "output": text,
+                            },
+                            stdout=stdout,
+                        )
+                response = _handle_shared_request(
+                    shared_service, request, on_progress=progress
+                )
             else:
                 response = service.handle(request)
         except (
@@ -682,6 +732,7 @@ def main(
             return 0
         if args.command == "desktop-doctor":
             gateway = _desktop_gateway(selected_environment)
+            backend = gateway.backend.describe("default")
             deepseek_report: dict[str, object] = {"configured": False}
             if config.deepseek_harness is not None:
                 try:
@@ -693,12 +744,13 @@ def main(
                         "status": "unavailable",
                         "version": config.deepseek_harness.expected_version,
                     }
-                if dsh_gateway is None and deepseek_report.get("status") != "unavailable":
-                    deepseek_report = {
-                        "configured": True,
-                        "status": "launch_token_unavailable",
-                        "version": config.deepseek_harness.expected_version,
-                    }
+                if dsh_gateway is None:
+                    if deepseek_report.get("status") != "unavailable":
+                        deepseek_report = {
+                            "configured": True,
+                            "status": "launch_token_unavailable",
+                            "version": config.deepseek_harness.expected_version,
+                        }
                 else:
                     try:
                         facts = dsh_gateway.doctor()
@@ -720,9 +772,12 @@ def main(
                 {
                     "schema_version": "1.0",
                     "status": "ready",
-                    "backend_pid": gateway.backend.record.pid,
-                    "backend_port": gateway.backend.record.port,
-                    "token_present": True,
+                    "backend_transport": backend.transport,
+                    "backend_pid": backend.pid,
+                    "backend_host": backend.host,
+                    "backend_port": backend.port,
+                    "credential_mode": backend.credential_mode,
+                    "token_present": backend.credential_mode == "published-token",
                     "token_value_exposed": False,
                     "profiles": [route.name for route in config.profiles],
                     "deepseek_harness": deepseek_report,

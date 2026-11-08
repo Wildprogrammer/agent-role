@@ -9,19 +9,20 @@
     "schema_version": {"const": "1.0"},
     "caller_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"},
     "session_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"},
-    "operation": {"enum": ["list_agents", "list_profiles", "switch_profile", "dispatch", "list_sessions", "bind_session", "show_binding", "unbind_session", "dispatch_shared", "dispatch_bound_voice", "create_session", "compress_session"]},
+    "operation": {"enum": ["list_agents", "list_profiles", "switch_profile", "dispatch", "list_sessions", "bind_session", "show_binding", "unbind_session", "dispatch_shared", "dispatch_bound_voice", "cancel_bound_voice", "create_session", "compress_session"]},
     "host": {"enum": ["hermes", "deepseek-harness"]},
     "profile": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$"},
     "input": {"type": "string", "minLength": 1, "pattern": "\\S"},
     "confirmed": {
       "type": "boolean",
-      "description": "Attests a real user confirmation for legacy dispatch, dispatch_shared, or lifecycle operations. It is forbidden on dispatch_bound_voice."
+      "description": "Attests a real user confirmation for legacy dispatch, dispatch_shared, or lifecycle operations. It is forbidden on dispatch_bound_voice and cancel_bound_voice."
     },
     "device_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"},
     "stored_session_id": {"type": "string", "minLength": 1, "maxLength": 512, "pattern": "\\S"},
     "limit": {"type": "integer", "minimum": 1, "maximum": 100},
     "idempotency_key": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$"},
     "binding_revision": {"type": "integer", "minimum": 0, "maximum": 2147483647},
+    "stream_progress": {"type": "boolean"},
     "attachments": {
       "type": "array",
       "minItems": 1,
@@ -43,6 +44,7 @@
     }
   },
   "allOf": [
+    {"if": {"properties": {"operation": {"not": {"const": "dispatch_bound_voice"}}}, "required": ["operation"]}, "then": {"not": {"required": ["stream_progress"]}}},
     {"if": {"properties": {"operation": {"not": {"const": "dispatch_bound_voice"}}}, "required": ["operation"]}, "then": {"not": {"required": ["attachments"]}}},
     {"if": {"properties": {"operation": {"enum": ["list_agents", "list_profiles"]}}, "required": ["operation"]}, "then": {"not": {"anyOf": [{"required": ["host"]}, {"required": ["profile"]}, {"required": ["input"]}, {"required": ["confirmed"]}, {"required": ["device_id"]}, {"required": ["stored_session_id"]}, {"required": ["limit"]}, {"required": ["idempotency_key"]}, {"required": ["binding_revision"]}]}}},
     {"if": {"properties": {"operation": {"const": "switch_profile"}}, "required": ["operation"]}, "then": {"required": ["profile"], "not": {"anyOf": [{"required": ["host"]}, {"required": ["input"]}, {"required": ["confirmed"]}, {"required": ["device_id"]}, {"required": ["stored_session_id"]}, {"required": ["limit"]}, {"required": ["idempotency_key"]}, {"required": ["binding_revision"]}]}}},
@@ -53,6 +55,7 @@
     {"if": {"properties": {"operation": {"const": "unbind_session"}}, "required": ["operation"]}, "then": {"required": ["device_id"], "not": {"anyOf": [{"required": ["host"]}, {"required": ["profile"]}, {"required": ["input"]}, {"required": ["confirmed"]}, {"required": ["stored_session_id"]}, {"required": ["limit"]}, {"required": ["idempotency_key"]}]}}},
     {"if": {"properties": {"operation": {"const": "dispatch_shared"}}, "required": ["operation"]}, "then": {"required": ["device_id", "input", "confirmed", "host", "profile", "stored_session_id", "binding_revision"], "properties": {"binding_revision": {"minimum": 1}}, "not": {"anyOf": [{"required": ["limit"]}, {"required": ["idempotency_key"]}]}}},
     {"if": {"properties": {"operation": {"const": "dispatch_bound_voice"}}, "required": ["operation"]}, "then": {"required": ["device_id", "input", "host", "profile", "stored_session_id", "binding_revision"], "properties": {"binding_revision": {"minimum": 1}}, "not": {"anyOf": [{"required": ["confirmed"]}, {"required": ["limit"]}, {"required": ["idempotency_key"]}]}}},
+    {"if": {"properties": {"operation": {"const": "cancel_bound_voice"}}, "required": ["operation"]}, "then": {"required": ["device_id", "host", "profile", "stored_session_id", "binding_revision"], "properties": {"binding_revision": {"minimum": 1}}, "not": {"anyOf": [{"required": ["input"]}, {"required": ["confirmed"]}, {"required": ["limit"]}, {"required": ["idempotency_key"]}, {"required": ["attachments"]}]}}},
     {"if": {"properties": {"operation": {"const": "create_session"}}, "required": ["operation"]}, "then": {"required": ["device_id", "confirmed", "idempotency_key", "host", "profile", "stored_session_id", "binding_revision"], "properties": {"binding_revision": {"minimum": 1}}, "not": {"anyOf": [{"required": ["input"]}, {"required": ["limit"]}]}}},
     {"if": {"properties": {"operation": {"const": "compress_session"}}, "required": ["operation"]}, "then": {"required": ["device_id", "confirmed", "host", "profile", "stored_session_id", "binding_revision"], "properties": {"binding_revision": {"minimum": 1}}, "not": {"anyOf": [{"required": ["input"]}, {"required": ["limit"]}, {"required": ["idempotency_key"]}]}}}
   ]

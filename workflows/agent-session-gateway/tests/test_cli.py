@@ -122,6 +122,67 @@ def test_doctor_reports_presence_without_printing_secret(tmp_path: Path) -> None
     assert "do-not-print-this" not in stdout.getvalue()
 
 
+def test_desktop_doctor_reports_dsh_initialization_failure_without_crashing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from agent_workflow_hub.xiaozhi_hermes_bridge import cli
+    from agent_workflow_hub.xiaozhi_hermes_bridge.desktop_gateway import (
+        GatewayBackendDescription,
+    )
+    from agent_workflow_hub.xiaozhi_hermes_bridge.dsh_web_gateway import (
+        DshGatewayError,
+    )
+
+    mapping = config_value(enabled=True)
+    mapping["deepseek_harness"] = {
+        "base_url": "http://127.0.0.1:3080",
+        "launch_token_env": "DSH_TOKEN",
+        "dsh_home": str(tmp_path.resolve()),
+        "expected_version": "0.2.1-rc.5",
+        "allowed_presets": ["assistant-agent"],
+    }
+    config = write_json(tmp_path / "config.json", mapping)
+
+    class Backend:
+        def describe(self, profile: str = "default") -> GatewayBackendDescription:
+            assert profile == "default"
+            return GatewayBackendDescription(
+                transport="native-gateway-ticket",
+                host="127.0.0.1",
+                port=9123,
+                pid=None,
+                credential_mode="one-use-ticket",
+            )
+
+    class Gateway:
+        backend = Backend()
+
+    monkeypatch.setattr(cli, "_desktop_gateway", lambda _environment: Gateway())
+    monkeypatch.setattr(
+        cli,
+        "_deepseek_gateway",
+        lambda *_args: (_ for _ in ()).throw(DshGatewayError("offline")),
+    )
+    stdout = io.StringIO()
+
+    exit_code = main(
+        ["desktop-doctor", "--config", str(config.resolve())],
+        environment={"DSH_TOKEN": "not-printed"},
+        stdout=stdout,
+    )
+
+    result = json.loads(stdout.getvalue())
+    assert exit_code == 0
+    assert result["status"] == "ready"
+    assert result["backend_transport"] == "native-gateway-ticket"
+    assert result["deepseek_harness"] == {
+        "configured": True,
+        "status": "unavailable",
+        "version": "0.2.1-rc.5",
+    }
+    assert "not-printed" not in stdout.getvalue()
+
+
 def test_simulation_never_calls_hermes(tmp_path: Path) -> None:
     config = write_json(tmp_path / "config.json", config_value(enabled=True))
     request = write_json(
@@ -440,6 +501,98 @@ def test_stdio_shared_binding_uses_device_id_across_socket_sessions(tmp_path: Pa
     assert responses[1]["session_id"] == "socket-2"
 
 
+def test_stdio_progress_requires_explicit_wire_capability(tmp_path: Path) -> None:
+    from agent_workflow_hub.xiaozhi_hermes_bridge.binding_store import BindingStore
+    from agent_workflow_hub.xiaozhi_hermes_bridge.cli import _serve_stdio
+    from agent_workflow_hub.xiaozhi_hermes_bridge.contracts import read_config
+    from agent_workflow_hub.xiaozhi_hermes_bridge.desktop_gateway import (
+        SharedTurnResult,
+    )
+    from agent_workflow_hub.xiaozhi_hermes_bridge.shared_service import (
+        SharedConversationService,
+    )
+
+    class Gateway:
+        def list_sessions(self, profile, *, limit=20):
+            return ({"id": "stored-1", "title": "Existing"},)
+
+        def send_to_session(
+            self,
+            *,
+            profile,
+            stored_session_id,
+            text,
+            on_progress=None,
+        ):
+            if on_progress is not None:
+                on_progress("累计正文。")
+            return SharedTurnResult(
+                status="complete",
+                stored_session_id=stored_session_id,
+                runtime_session_id=stored_session_id,
+                text="累计正文。最终句。",
+                user_row_id=1,
+            )
+
+    mapping = config_value(enabled=True)
+    mapping["bound_voice_dispatch_mode"] = "direct"
+    config_path = write_json(tmp_path / "config.json", mapping)
+    config = read_config(config_path.resolve())
+    shared = SharedConversationService(
+        config,
+        BindingStore((tmp_path / "bindings.json").resolve()),
+        Gateway(),
+    )
+    binding = shared.bind(
+        device_id="esp32-s3",
+        profile="default",
+        stored_session_id="stored-1",
+    )
+
+    def request(session_id: str, *, stream_progress: bool | None = None):
+        value = {
+            "schema_version": "1.0",
+            "caller_id": "xiaozhi-backend",
+            "session_id": session_id,
+            "operation": "dispatch_bound_voice",
+            "device_id": "esp32-s3",
+            "input": "问题",
+            "host": "hermes",
+            "profile": "default",
+            "stored_session_id": "stored-1",
+            "binding_revision": binding.revision,
+        }
+        if stream_progress is not None:
+            value["stream_progress"] = stream_progress
+        return json.dumps(value)
+
+    stdout = io.StringIO()
+    _serve_stdio(
+        config,
+        environment={},
+        stdin=io.StringIO(
+            request("legacy-session")
+            + "\n"
+            + request("stream-session", stream_progress=True)
+            + "\n"
+        ),
+        stdout=stdout,
+        shared=shared,
+    )
+
+    responses = [json.loads(line) for line in stdout.getvalue().splitlines()]
+    assert [item["status"] for item in responses] == [
+        "completed",
+        "progress",
+        "completed",
+    ], responses
+    assert responses[0]["session_id"] == "legacy-session"
+    assert responses[1]["session_id"] == "stream-session"
+    assert responses[2]["session_id"] == "stream-session"
+    assert responses[1]["output"] == "累计正文。"
+    assert responses[2]["output"] == "累计正文。最终句。"
+
+
 def test_shared_dispatch_failure_exposes_dsh_reason_without_losing_status() -> None:
     from types import SimpleNamespace
 
@@ -588,4 +741,62 @@ def test_deepseek_initialization_failure_does_not_block_hermes(
     assert (agents[-1]["host"], agents[-1]["available"]) == (
         "deepseek-harness",
         False,
+    )
+
+
+def test_hermes_initialization_failure_does_not_block_deepseek(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from agent_workflow_hub.xiaozhi_hermes_bridge import cli
+    from agent_workflow_hub.xiaozhi_hermes_bridge.contracts import BridgeConfig
+    from agent_workflow_hub.xiaozhi_hermes_bridge.desktop_gateway import (
+        DesktopGatewayError,
+    )
+
+    mapping = config_value(enabled=True)
+    mapping["deepseek_harness"] = {
+        "base_url": "http://127.0.0.1:8765",
+        "launch_token_env": "DSH_TOKEN",
+        "dsh_home": str(tmp_path.resolve()),
+        "expected_version": "0.2.0-rc.2",
+        "allowed_presets": ["assistant-agent"],
+    }
+    config = BridgeConfig.from_mapping(mapping)
+
+    class DeepSeekGateway:
+        def list_agents(self):
+            return (
+                {
+                    "host": "deepseek-harness",
+                    "id": "assistant-agent",
+                    "name": "assistant-agent",
+                    "default": False,
+                    "available": True,
+                },
+            )
+
+    monkeypatch.setattr(
+        cli,
+        "_desktop_gateway",
+        lambda _environment: (_ for _ in ()).throw(
+            DesktopGatewayError("desktop serve is offline")
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_deepseek_gateway",
+        lambda _config, _environment: DeepSeekGateway(),
+    )
+
+    service = cli._shared_service(
+        config,
+        {"DSH_TOKEN": "live"},
+        (tmp_path / "bindings.json").resolve(),
+    )
+    agents = service.list_agents()
+
+    assert (agents[0]["host"], agents[0]["available"]) == ("hermes", False)
+    assert (agents[-1]["host"], agents[-1]["available"]) == (
+        "deepseek-harness",
+        True,
     )

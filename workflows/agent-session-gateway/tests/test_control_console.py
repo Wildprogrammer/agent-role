@@ -1050,7 +1050,6 @@ def test_live_http_is_companion_scoped_session_bound_and_no_store() -> None:
     while companion_port == admin_port:
         companion_port = _free_port()
     broker = TransientCompanionBroker()
-    broker.register_connection(device_id="esp32-s3", connection_generation="generation-1")
     servers = ControlHttpServers(
         FakeControlCoordinator(),  # type: ignore[arg-type]
         admin_port=admin_port,
@@ -1074,6 +1073,27 @@ def test_live_http_is_companion_scoped_session_bound_and_no_store() -> None:
         assert status == 404
 
         cookie, csrf = _login(companion_port, "companion-secret")
+        status, _, waiting = _request(
+            companion_port, "POST", "/api/live/wait", body={"previous": ""},
+            cookie=cookie, csrf=csrf, origin=f"http://127.0.0.1:{companion_port}",
+        )
+        assert status == 200 and waiting["resume_token"]
+        identity = {"device_id": "esp32-s3", "connection_generation": "generation-1"}
+        broker.register_connection(**identity)
+        wake_turn = broker.start_turn(**identity, capture_active=True)
+        broker.publish_question(**identity, turn_id=wake_turn, text="你好灵溪")
+        status, _, watch = _request(
+            companion_port, "POST", "/api/live/subscribe",
+            body={**identity, "resume_token": waiting["resume_token"], "after": 0},
+            cookie=cookie, csrf=csrf, origin=f"http://127.0.0.1:{companion_port}",
+        )
+        assert status == 200 and watch["resumed"]
+        status, _, wake = _request(
+            companion_port, "GET",
+            f"/api/live?subscription={watch['subscription']}&after={watch['cursor']}",
+            cookie=cookie,
+        )
+        assert status == 200 and wake["projection"]["question"] == "你好灵溪"
         status, _, value = _request(
             companion_port,
             "POST",
@@ -1343,10 +1363,21 @@ const projection = (turn_id, revision, question, answer, capture_active = false,
   api.applyProjection(projection("turn-6", 0, "", "", true));
   if (api.liveState.turnId !== "" || !element("live-dialogue").hidden) throw new Error("new page replayed a blank baseline turn");
 
+  let usedWait = false;
+  requestImpl = (path, options) => {
+    if (path === "/api/live/wait") return Promise.resolve({resume_token: "wait-before-wake"});
+    if (path === "/api/live/subscribe") {
+      usedWait = options.body.resume_token === "wait-before-wake" && options.body.after === 0;
+      return Promise.resolve({subscription: "subscription-1", resume_token: "resume-1", cursor: 1});
+    }
+    return Promise.resolve({});
+  };
+  await api.render({ runtime: { devices: [] } });
   await api.render({ runtime: { devices: [{
     device_id: "device-1", connection_generation: "generation-1", online: true,
     capabilities: {}, binding: null, pending_action: null,
   }] } });
+  if (!usedWait) throw new Error("already-open offline page missed the first wake");
   api.applyProjection(projection("turn-7", 2, "离线前问题", "离线前回答"));
   let releaseUnsubscribe;
   requestImpl = (path) => path === "/api/live/unsubscribe"

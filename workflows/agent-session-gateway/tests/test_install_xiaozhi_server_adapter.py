@@ -98,3 +98,40 @@ def test_apply_replaces_changed_artifacts_atomically(tmp_path: Path, monkeypatch
     assert len(replaced) == 1
     assert replaced[0][1] == target
     assert not list(server_source.glob("*.tmp"))
+
+
+def test_apply_rechecks_target_immediately_before_replace(
+    tmp_path: Path, monkeypatch
+) -> None:
+    module = _load_installer()
+    source_root = tmp_path / "sources"
+    server_source = tmp_path / "server"
+    source_root.mkdir()
+    server_source.mkdir()
+    source = source_root / "adapter.py"
+    target = server_source / "adapter.py"
+    source.write_bytes(b"new-adapter")
+    target.write_bytes(b"old-adapter")
+    monkeypatch.setattr(
+        module,
+        "KNOWN_MANAGED_SHA256",
+        {"adapter.py": {_sha256(b"old-adapter")}},
+    )
+    real_validate = module._validate_managed_target
+    validations = 0
+
+    def mutate_after_preflight(target_path, root_path):
+        nonlocal validations
+        real_validate(target_path, root_path)
+        validations += 1
+        if validations == 2:
+            target.write_bytes(b"raced-adapter")
+
+    monkeypatch.setattr(module, "_validate_managed_target", mutate_after_preflight)
+
+    with pytest.raises(module.InstallError, match="changed during install"):
+        module._install_artifacts(
+            ((source, target),), server_source, apply=True
+        )
+
+    assert target.read_bytes() == b"raced-adapter"

@@ -15,7 +15,7 @@ from agent_workflow_hub.xiaozhi_hermes_bridge.xiaoai_mcp import (
     XiaoAiMcpSettings,
     create_xiaoai_mcp_server,
 )
-from agent_workflow_hub.xiaozhi_hermes_bridge.attachments import AttachmentStore
+from agent_workflow_hub.xiaozhi_hermes_bridge.attachments import AttachmentBinding, AttachmentStore
 from agent_workflow_hub.xiaozhi_hermes_bridge import xiaoai_mcp
 
 
@@ -117,9 +117,15 @@ class FakeAdapter:
         device_id: str,
         prompt: str,
         attachments: tuple[Mapping[str, object], ...] = (),
+        expected_binding: AttachmentBinding | None = None,
     ) -> Mapping[str, object]:
         assert session_id == "xiaoai-mcp"
         assert device_id == "xiaoai-phone"
+        if attachments:
+            assert expected_binding == AttachmentBinding(
+                device_id, self.binding["host"], self.binding["profile"],
+                self.binding["stored_session_id"], self.binding["binding_revision"],
+            )
         self.sent.append(prompt)
         self.sent_attachments.append(attachments)
         return {

@@ -20,6 +20,7 @@ from .desktop_gateway import (
     SharedTurnResult,
     default_discovery_paths,
     discover_desktop_backend,
+    discover_desktop_gateway_backend,
 )
 from .shared_service import SharedConversationService
 from .control_events import ControlEvent, ControlEventStore, ControlEventStoreError
@@ -68,6 +69,7 @@ __all__ = [
     "SharedTurnResult",
     "default_discovery_paths",
     "discover_desktop_backend",
+    "discover_desktop_gateway_backend",
     "ProfileRoute",
     "XiaozhiAdapterError",
     "XiaozhiHermesAdapter",

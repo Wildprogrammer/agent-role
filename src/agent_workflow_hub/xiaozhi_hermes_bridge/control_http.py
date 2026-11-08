@@ -392,6 +392,9 @@ class LingxiRequestHandler(BaseHTTPRequestHandler):
         body: dict[str, object],
         session: BrowserSession,
     ) -> dict[str, object]:
+        if path == "/api/live/wait":
+            self._closed(body, {"previous"})
+            return self.app.live_companion.wait_for_connection(session.token, self._string(body, "previous"))
         if path == "/api/live/subscribe":
             fields = set(body)
             initial_fields = {"device_id", "connection_generation"}

@@ -76,3 +76,10 @@ fallbacks.
 Real microphone, speaker, wake-word, OLED, Wi-Fi, interruption, and power-cycle
 claims require a physical-device acceptance run. Software simulation is not
 evidence for those capabilities.
+
+## 手机独立入口
+
+受管启动器可通过 `-LingxiMobileConfig <ABSOLUTE_CONFIG_JSON>` 启用手机 HTTPS 入口，
+复用当前 ASR/TTS 和网关宿主适配器；手机文字、照片和录音无需实体 ESP32 在线。
+服务环境需要 `aiohttp>=3.13,<4`，Hub 测试环境使用 `.[dev]`，独立导入手机模块可选 `.[mobile]`。
+完整依赖、证书生成、前台媒体边界和公网代理要求见 [mobile-client.md](mobile-client.md)。

@@ -1,0 +1,8 @@
+{
+  "host": "0.0.0.0",
+  "port": 8767,
+  "origins": ["https://192.0.2.10:8767", "https://localhost:8767"],
+  "certificate": "C:/Lingxi/mobile-tls/server.crt",
+  "private_key": "C:/Lingxi/mobile-tls/server.key",
+  "attachment_root": "C:/Lingxi/mobile-attachments"
+}

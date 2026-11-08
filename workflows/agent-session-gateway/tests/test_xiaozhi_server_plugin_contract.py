@@ -7,6 +7,7 @@ import importlib.util
 import json
 from pathlib import Path
 import sys
+from threading import Event
 from types import ModuleType, SimpleNamespace
 
 import pytest
@@ -15,7 +16,6 @@ import pytest
 WORKFLOW_ROOT = Path(__file__).resolve().parents[1]
 PLUGIN = WORKFLOW_ROOT / "adapters" / "xiaozhi_server_plugin.py"
 OLLAMA_ADAPTER = WORKFLOW_ROOT / "adapters" / "ollama_nonstream_tools_llm.py"
-
 
 def test_plugin_exposes_two_step_tools_and_config_driven_agent_ids() -> None:
     tree = ast.parse(PLUGIN.read_text(encoding="utf-8"))
@@ -137,6 +137,38 @@ def test_plugin_agent_ids_follow_reviewed_external_config(
     with pytest.raises(RuntimeError, match="changed after review"):
         bad_spec.loader.exec_module(bad_module)
 
+def _load_plugin_module(monkeypatch, name: str):
+    plugins_func = ModuleType("plugins_func")
+    register = ModuleType("plugins_func.register")
+
+    class Action:
+        NONE = "none"
+        ERROR = "error"
+        RESPONSE = "response"
+
+    class ActionResponse:
+        def __init__(self, **values):
+            self.__dict__.update(values)
+
+    class ToolType:
+        SYSTEM_CTL = "system_ctl"
+
+    def register_function(*_args, **_kwargs):
+        return lambda function: function
+
+    register.Action = Action
+    register.ActionResponse = ActionResponse
+    register.ToolType = ToolType
+    register.register_function = register_function
+    monkeypatch.setitem(sys.modules, "plugins_func", plugins_func)
+    monkeypatch.setitem(sys.modules, "plugins_func.register", register)
+
+    spec = importlib.util.spec_from_file_location(name, PLUGIN)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
 
 def test_control_lifecycle_is_generation_bound_and_registers_only_when_mcp_ready() -> None:
     source = PLUGIN.read_text(encoding="utf-8")
@@ -157,14 +189,16 @@ def test_control_lifecycle_is_generation_bound_and_registers_only_when_mcp_ready
     assert 'result.get("nextCursor")' in lifecycle
     assert "await conn.mcp_client.is_ready()" in lifecycle
     assert "await _register_control_connection(conn, device_id.strip())" in lifecycle
-    assert "await _unregister_control_connection(self)" in lifecycle
+    assert "await _close_with_control_cleanup(self, original_close, ws)" in lifecycle
     assert "original_handle_text = connection_module.handleTextMessage" in lifecycle
     assert "return await original_handle_text(conn, message)" in lifecycle
-    assert 'elif state in {"stop", "detect"}' in lifecycle
-    assert "_set_live_capture(conn, False)" in lifecycle
     assert 'if state == "start"' in lifecycle
+    assert "_begin_live_capture(conn)" in lifecycle
+    assert 'elif state == "detect"' in lifecycle
+    assert '_begin_live_detection(conn, payload.get("text"))' in lifecycle
+    assert 'elif state == "stop"' in lifecycle
+    assert "_end_live_capture(conn)" in lifecycle
     assert "connection_module.handleTextMessage = handle_text_message" in lifecycle
-    assert "_start_live_turn(conn, capture_active=True)" in lifecycle
     assert 'if state == "sentence_start"' in lifecycle
     assert "projection_allowed = not pinned_turn or pinned_turn == current_turn" in lifecycle
     assert "_append_live_spoken_answer(conn, text, turn_id=pinned_turn)" in lifecycle
@@ -182,6 +216,262 @@ def test_control_lifecycle_is_generation_bound_and_registers_only_when_mcp_ready
 
     assert "runtime.unregister_connection(" in unregistration
     assert "connection_generation=generation" in unregistration
+
+
+def test_wake_detection_publishes_immediately_and_start_reuses_its_turn(
+    monkeypatch,
+) -> None:
+    module = _load_plugin_module(monkeypatch, "test_wake_caption_plugin")
+    calls = []
+
+    class FakeRuntime:
+        def register_live_projection_connection(self, **values):
+            calls.append(("register", values))
+
+        def start_live_turn(self, **values):
+            calls.append(("start", values))
+            return "wake-turn"
+
+        def publish_live_question(self, **values):
+            calls.append(("question", values))
+
+        def set_live_capture(self, **values):
+            calls.append(("capture", values))
+
+    module._control_runtime = FakeRuntime()
+    module._control_runtime_initialized = True
+    conn = SimpleNamespace(device_id="esp32-s3")
+
+    assert module._begin_live_detection(conn, "你好灵溪") == "wake-turn"
+    assert module._begin_live_capture(conn) == "wake-turn"
+    assert module._begin_live_capture(conn) == "wake-turn"
+
+    assert [kind for kind, _ in calls] == [
+        "register",
+        "start",
+        "question",
+        "capture",
+    ]
+    assert calls[1][1]["capture_active"] is False
+    assert calls[2][1]["turn_id"] == "wake-turn"
+    assert calls[2][1]["text"] == "你好灵溪"
+    assert calls[3][1]["active"] is True
+    assert conn._lingxi_live_turn_id == "wake-turn"
+    assert conn._lingxi_live_detect_turn_id == ""
+    assert conn._lingxi_live_detect_pending is False
+
+
+def test_wake_detection_is_not_reused_after_an_answer(monkeypatch) -> None:
+    module = _load_plugin_module(monkeypatch, "test_wake_answer_plugin")
+    starts = []
+
+    class FakeRuntime:
+        def register_live_projection_connection(self, **_values):
+            return None
+
+        def start_live_turn(self, **values):
+            starts.append(values)
+            return f"turn-{len(starts)}"
+
+        def publish_live_question(self, **_values):
+            return None
+
+        def publish_live_answer(self, **_values):
+            return None
+
+    module._control_runtime = FakeRuntime()
+    module._control_runtime_initialized = True
+    conn = SimpleNamespace(device_id="esp32-s3")
+
+    assert module._begin_live_detection(conn, "你好灵溪") == "turn-1"
+    module._publish_live_answer(conn, "已经回答", turn_id="turn-1")
+    assert module._begin_live_capture(conn) == "turn-2"
+
+    assert [item["capture_active"] for item in starts] == [False, True]
+    assert conn._lingxi_live_detect_pending is False
+    assert conn._lingxi_live_turn_id == "turn-2"
+
+
+def test_plain_listen_start_without_detection_creates_a_capture_turn(monkeypatch) -> None:
+    module = _load_plugin_module(monkeypatch, "test_plain_start_plugin")
+    starts = []
+
+    class FakeRuntime:
+        def register_live_projection_connection(self, **_values):
+            return None
+
+        def start_live_turn(self, **values):
+            starts.append(values)
+            return "capture-turn"
+
+    module._control_runtime = FakeRuntime()
+    module._control_runtime_initialized = True
+    conn = SimpleNamespace(device_id="esp32-s3")
+
+    assert module._begin_live_capture(conn) == "capture-turn"
+    assert starts == [
+        {
+            "device_id": "esp32-s3",
+            "connection_generation": conn._lingxi_connection_generation,
+            "capture_active": True,
+        }
+    ]
+
+
+def test_asr_timeout_drains_one_worker_and_rejects_overlapping_inference(
+    monkeypatch,
+) -> None:
+    module = _load_plugin_module(monkeypatch, "test_asr_timeout_plugin")
+    monkeypatch.setattr(module, "_conversion_timeout_seconds", lambda *_args: 0.01)
+    module._control_runtime = None
+    module._control_runtime_initialized = True
+    worker_started = Event()
+    worker_release = Event()
+    worker_finished = Event()
+
+    class FakeAsr:
+        def __init__(self):
+            self.calls = 0
+
+        async def speech_to_text(self, *_args, **_kwargs):
+            self.calls += 1
+
+            def infer():
+                worker_started.set()
+                worker_release.wait(2)
+                worker_finished.set()
+                return "识别结果", None
+
+            return await asyncio.to_thread(infer)
+
+    class FakeWebSocket:
+        async def send(self, _payload):
+            return None
+
+    class FakeConnection:
+        session_id = "voice-session"
+        device_id = "esp32-s3"
+        close_after_chat = True
+        client_abort = False
+
+        def __init__(self):
+            self.asr = FakeAsr()
+            self.tts = None
+            self.websocket = FakeWebSocket()
+            self.closed = 0
+
+        def clear_queues(self):
+            return None
+
+        def clearSpeakStatus(self):
+            return None
+
+        async def close(self):
+            self.closed += 1
+
+    conn = FakeConnection()
+    module._ensure_bounded_voice_converters(conn)
+
+    async def exercise():
+        assert await conn.asr.speech_to_text([], "voice-session") == ("", None)
+        assert worker_started.is_set()
+        assert module._asr_conversion_task is not None
+        assert not module._asr_conversion_task.done()
+        assert await conn.asr.speech_to_text([], "voice-session") == ("", None)
+        assert conn.asr.calls == 1
+        worker_release.set()
+        for _ in range(100):
+            if module._asr_conversion_task is None:
+                break
+            await asyncio.sleep(0.01)
+
+    asyncio.run(exercise())
+
+    assert worker_finished.is_set()
+    assert module._asr_conversion_task is None
+    assert conn.closed == 2
+
+
+def test_edge_tts_timeout_crosses_to_owner_loop_and_closes_fail_closed(
+    monkeypatch, tmp_path
+) -> None:
+    module = _load_plugin_module(monkeypatch, "test_tts_timeout_plugin")
+    monkeypatch.setattr(module, "_conversion_timeout_seconds", lambda *_args: 0.01)
+    module._control_runtime = None
+    module._control_runtime_initialized = True
+
+    class FakeTts:
+        def __init__(self):
+            self.calls = 0
+
+        async def text_to_speak(self, _text, output_file):
+            self.calls += 1
+            Path(output_file).write_bytes(b"partial")
+            await asyncio.sleep(60)
+
+    FakeTts.__module__ = "core.providers.tts.edge"
+
+    class FailingWebSocket:
+        async def send(self, _payload):
+            raise RuntimeError("socket already closed")
+
+    class FakeConnection:
+        session_id = "voice-session"
+        device_id = "esp32-s3"
+        close_after_chat = True
+        client_abort = False
+
+        def __init__(self):
+            self.asr = None
+            self.tts = FakeTts()
+            self.websocket = FailingWebSocket()
+            self.queue_clear_attempts = 0
+            self.speak_clear_attempts = 0
+            self.closed = None
+
+        def clear_queues(self):
+            self.queue_clear_attempts += 1
+            raise RuntimeError("queue already closed")
+
+        def clearSpeakStatus(self):
+            self.speak_clear_attempts += 1
+            raise RuntimeError("speaker already closed")
+
+        async def close(self):
+            self.closed.set()
+
+    conn = FakeConnection()
+    output_file = tmp_path / "partial.wav"
+
+    async def exercise():
+        conn.loop = asyncio.get_running_loop()
+        conn.closed = asyncio.Event()
+        module._ensure_bounded_voice_converters(conn)
+
+        def synthesize(text):
+            try:
+                asyncio.run(conn.tts.text_to_speak(text, str(output_file)))
+            except RuntimeError as exc:
+                return str(exc)
+            raise AssertionError("TTS timeout was not raised")
+
+        assert "timed out" in await asyncio.to_thread(synthesize, "测试")
+        await asyncio.wait_for(conn.closed.wait(), timeout=1)
+        for _ in range(100):
+            if getattr(conn, "_lingxi_voice_pipeline_expiry_future", None) is None:
+                break
+            await asyncio.sleep(0.01)
+        assert "already expired" in await asyncio.to_thread(
+            synthesize, "不应重试"
+        )
+
+    asyncio.run(exercise())
+
+    assert conn.tts.calls == 1
+    assert not output_file.exists()
+    assert conn.queue_clear_attempts == 1
+    assert conn.speak_clear_attempts == 1
+    assert conn._lingxi_voice_pipeline_expiry_future is None
 
 
 def test_plugin_declares_transcript_log_redaction_without_logging_caption_payloads() -> None:
@@ -251,8 +541,8 @@ def test_device_response_projection_is_bounded_and_preserves_short_answers(
 | --- | --- |
 | 会话 | 成功 |
 
-- 结果写入 C:\\Users\\Administrator\\workspace\\result.json
-- [详细证据](<C:\\Users\\Administrator\\workspace\\evidence.md>)
+- 结果写入 C:\\Users\\YOUR_NAME\\workspace\\result.json
+- [详细证据](<C:\\Users\\YOUR_NAME\\workspace\\evidence.md>)
 - 证据三
 - 证据四
 """
@@ -267,6 +557,18 @@ def test_device_response_projection_is_bounded_and_preserves_short_answers(
     table_only = module._device_response_projection("| 项目 | 结果 |\n| --- | --- |\n| A | B |")
     assert table_only.startswith("Agent 任务已完成。答案包含表格。")
     assert len(table_only) <= 200
+
+    projector = module._StreamingVoiceProjector()
+    assert projector.feed("第一句。第二") == ["第一句。"]
+    assert projector.feed("第一句。第二句。") == ["第二句。"]
+    assert projector.feed("第一句。第二句。", final=True) == []
+
+    policy_conn = SimpleNamespace(config={"close_connection_no_voice_time": 840})
+    module._apply_voice_session_policy(policy_conn)
+    assert policy_conn.config == {
+        "close_connection_no_voice_time": 12,
+        "end_prompt": {"enable": False},
+    }
 
 
 def test_direct_bound_tool_uses_stable_device_and_projects_host_response(
@@ -372,6 +674,114 @@ def test_direct_bound_tool_uses_stable_device_and_projects_host_response(
     )
     assert live_calls[-1][0] == "spoken"
     assert live_calls[-1][1]["turn_id"] == "turn-1"
+
+
+def test_stopped_stream_cannot_queue_old_agent_text_into_the_next_turn(
+    monkeypatch,
+) -> None:
+    plugins_func = ModuleType("plugins_func")
+    register = ModuleType("plugins_func.register")
+
+    class Action:
+        NONE = "none"
+        ERROR = "error"
+        RESPONSE = "response"
+
+    class ActionResponse:
+        def __init__(self, **values):
+            self.__dict__.update(values)
+
+    class ToolType:
+        SYSTEM_CTL = "system_ctl"
+
+    def register_function(*_args, **_kwargs):
+        return lambda function: function
+
+    register.Action = Action
+    register.ActionResponse = ActionResponse
+    register.ToolType = ToolType
+    register.register_function = register_function
+    monkeypatch.setitem(sys.modules, "plugins_func", plugins_func)
+    monkeypatch.setitem(sys.modules, "plugins_func.register", register)
+
+    dto_module = ModuleType("core.providers.tts.dto.dto")
+    dto_module.ContentType = SimpleNamespace(TEXT="text")
+    for name in ("core", "core.providers", "core.providers.tts", "core.providers.tts.dto"):
+        monkeypatch.setitem(sys.modules, name, ModuleType(name))
+    monkeypatch.setitem(sys.modules, "core.providers.tts.dto.dto", dto_module)
+
+    spec = importlib.util.spec_from_file_location("test_stopped_stream_plugin", PLUGIN)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    module._control_runtime = None
+    module._control_runtime_initialized = True
+
+    class FakeAdapter:
+        def __init__(self):
+            self.started = asyncio.Event()
+            self.release = asyncio.Event()
+
+        async def dispatch_bound(
+            self, session_id, *, device_id, prompt, on_progress
+        ):
+            await on_progress("第一句。")
+            self.started.set()
+            await self.release.wait()
+            await on_progress("第一句。旧回答不得回灌。")
+            return {
+                "status": "completed",
+                "output": "第一句。旧回答不得回灌。",
+            }
+
+    class FakeTts:
+        def __init__(self):
+            self.calls = []
+
+        def tts_one_sentence(
+            self, conn, content_type, *, content_detail, sentence_id
+        ):
+            self.calls.append((content_detail, sentence_id))
+
+    class FakeWebSocket:
+        async def send(self, _payload):
+            return None
+
+    class FakeConnection:
+        session_id = "voice-session"
+        device_id = "esp32-s3"
+        sentence_id = "sentence-old"
+        close_after_chat = False
+        client_abort = False
+
+        def __init__(self):
+            self.tts = FakeTts()
+            self.websocket = FakeWebSocket()
+            self.config = {}
+
+        def clear_queues(self):
+            return None
+
+        def clearSpeakStatus(self):
+            return None
+
+    adapter = FakeAdapter()
+    module._adapter = adapter
+    conn = FakeConnection()
+
+    async def exercise():
+        task = asyncio.create_task(module.agent_dispatch_bound(conn, "长任务"))
+        await adapter.started.wait()
+        assert conn.tts.calls == [("第一句。", "sentence-old")]
+        await module._stop_current_speech(conn)
+        conn.client_abort = False
+        conn.sentence_id = "sentence-new"
+        adapter.release.set()
+        result = await task
+        assert result.action == "none"
+
+    asyncio.run(exercise())
+    assert conn.tts.calls == [("第一句。", "sentence-old")]
 
 
 def test_control_failure_logging_projects_only_a_bounded_error_code() -> None:
@@ -1014,7 +1424,7 @@ def test_deterministic_gateway_calls_preserve_prompt_and_stop_after_tool(monkeyp
         "prompt": "请解释开启新会话是什么意思"
     }
 
-    explained_switch = bound_call("请解释为什么切换到游戏智能体会失败")
+    explained_switch = bound_call("请解释为什么切换到三冰智能体会失败")
     assert explained_switch.function.name == "agent_dispatch_bound"
     explained_binding = bound_call(
         "请解释绑定 DeepSeek assistant-agent 的会话 ID：session-1234 会发生什么"
@@ -1270,6 +1680,256 @@ def test_local_stop_and_exit_controls_are_silent_and_preserve_durable_binding(
     assert rejected.response == "音量只能设置为零到一百。"
 
 
+def test_stop_and_exit_close_even_when_device_cleanup_is_already_broken(
+    monkeypatch,
+) -> None:
+    module = _load_plugin_module(monkeypatch, "test_failed_device_cleanup_plugin")
+    module._control_runtime = None
+    module._control_runtime_initialized = True
+
+    class FakeAdapter:
+        async def cancel_prepared_for_device(self, *, device_id):
+            return {"status": "ok", "cancelled_count": 0}
+
+    class FailingWebSocket:
+        def __init__(self):
+            self.attempts = 0
+
+        async def send(self, _payload):
+            self.attempts += 1
+            raise RuntimeError("socket already closed")
+
+    class FakeConnection:
+        session_id = "voice-session"
+        device_id = "esp32-s3"
+        close_after_chat = True
+        client_abort = False
+        _lingxi_live_detect_pending = True
+        _lingxi_live_detect_turn_id = "wake-turn"
+
+        def __init__(self):
+            self.websocket = FailingWebSocket()
+            self.queue_clear_attempts = 0
+            self.speak_clear_attempts = 0
+            self.closed = 0
+
+        def clear_queues(self):
+            self.queue_clear_attempts += 1
+            raise RuntimeError("queue already closed")
+
+        def clearSpeakStatus(self):
+            self.speak_clear_attempts += 1
+            raise RuntimeError("speaker already closed")
+
+        async def close(self):
+            self.closed += 1
+
+    module._adapter = FakeAdapter()
+    conn = FakeConnection()
+
+    stopped = asyncio.run(module.lingxi_stop_speaking(conn))
+    assert stopped.action == "none"
+    assert conn.closed == 0
+
+    conn.client_abort = False
+    exited = asyncio.run(module.lingxi_exit_conversation(conn))
+    assert exited.action == "none"
+    assert conn.closed == 1
+    assert conn.websocket.attempts == 2
+    assert conn.queue_clear_attempts == 2
+    assert conn.speak_clear_attempts == 2
+    assert conn._lingxi_live_detect_pending is False
+    assert conn._lingxi_live_detect_turn_id == ""
+
+
+def test_cancelled_stop_still_clears_all_local_speech_state(monkeypatch) -> None:
+    module = _load_plugin_module(monkeypatch, "test_cancelled_stop_plugin")
+    state_changes = []
+    monkeypatch.setattr(
+        module,
+        "_set_live_capture",
+        lambda _conn, active: state_changes.append(("capture", active)),
+    )
+    monkeypatch.setattr(
+        module,
+        "_set_live_speech",
+        lambda _conn, active: state_changes.append(("speech", active)),
+    )
+    monkeypatch.setattr(
+        module,
+        "_publish_control",
+        lambda _conn, state, **values: state_changes.append(
+            (state, values.get("operation"))
+        ),
+    )
+
+    class BlockingWebSocket:
+        def __init__(self):
+            self.started = asyncio.Event()
+
+        async def send(self, _payload):
+            self.started.set()
+            await asyncio.Event().wait()
+
+    class FakeConnection:
+        session_id = "voice-session"
+        close_after_chat = True
+        client_abort = False
+        _lingxi_live_detect_pending = True
+        _lingxi_live_detect_turn_id = "wake-turn"
+
+        def __init__(self):
+            self.websocket = BlockingWebSocket()
+            self.queues_cleared = 0
+            self.speak_cleared = 0
+
+        def clear_queues(self):
+            self.queues_cleared += 1
+
+        def clearSpeakStatus(self):
+            self.speak_cleared += 1
+
+    conn = FakeConnection()
+
+    async def exercise():
+        task = asyncio.create_task(module._stop_current_speech(conn))
+        await conn.websocket.started.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(exercise())
+
+    assert conn.queues_cleared == 1
+    assert conn.speak_cleared == 1
+    assert conn._lingxi_live_detect_pending is False
+    assert state_changes == [
+        ("capture", False),
+        ("speech", False),
+        ("idle", "stop_speaking"),
+    ]
+
+
+def test_cancelled_exit_closes_without_cancelling_shared_switch_future(
+    monkeypatch,
+) -> None:
+    module = _load_plugin_module(monkeypatch, "test_cancelled_exit_plugin")
+
+    class FakeConnection:
+        session_id = "voice-session"
+        device_id = "esp32-s3"
+
+        def __init__(self):
+            self.closed = 0
+
+        async def close(self):
+            self.closed += 1
+
+    async def cancel_during_binding_wait():
+        binding_done = asyncio.get_running_loop().create_future()
+        monkeypatch.setattr(
+            module,
+            "_cancel_switch_for_exit",
+            lambda _device_id: (True, binding_done),
+        )
+        conn = FakeConnection()
+        task = asyncio.create_task(module.lingxi_exit_conversation(conn))
+        await asyncio.sleep(0)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert conn.closed == 1
+        assert not binding_done.cancelled()
+        binding_done.set_result({"status": "cancelled_and_restored"})
+
+    asyncio.run(cancel_during_binding_wait())
+
+
+def test_cancelled_exit_during_prepared_cleanup_still_closes(monkeypatch) -> None:
+    module = _load_plugin_module(monkeypatch, "test_cancelled_prepared_plugin")
+    monkeypatch.setattr(
+        module, "_cancel_switch_for_exit", lambda _device_id: (False, None)
+    )
+
+    class BlockingAdapter:
+        def __init__(self):
+            self.started = asyncio.Event()
+
+        async def cancel_prepared_for_device(self, *, device_id):
+            self.started.set()
+            await asyncio.Event().wait()
+
+    class FakeConnection:
+        session_id = "voice-session"
+        device_id = "esp32-s3"
+
+        def __init__(self):
+            self.closed = 0
+
+        async def close(self):
+            self.closed += 1
+
+    async def exercise():
+        adapter = BlockingAdapter()
+        module._adapter = adapter
+        conn = FakeConnection()
+        task = asyncio.create_task(module.lingxi_exit_conversation(conn))
+        await adapter.started.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert conn.closed == 1
+
+    asyncio.run(exercise())
+
+
+def test_control_close_logs_unregister_failure_and_preserves_cancellation(
+    monkeypatch,
+) -> None:
+    module = _load_plugin_module(monkeypatch, "test_control_close_plugin")
+    warnings = []
+    close_calls = []
+
+    class FakeLogger:
+        def bind(self, **_values):
+            return self
+
+        def warning(self, value):
+            warnings.append(value)
+
+    conn = SimpleNamespace(
+        logger=FakeLogger(),
+        _lingxi_live_detect_pending=True,
+        _lingxi_live_detect_turn_id="wake-turn",
+    )
+
+    async def original_close(live_conn, ws):
+        close_calls.append((live_conn, ws))
+        return "closed"
+
+    async def failed_unregister(_conn):
+        raise RuntimeError("registry unavailable")
+
+    monkeypatch.setattr(module, "_unregister_control_connection", failed_unregister)
+    assert (
+        asyncio.run(module._close_with_control_cleanup(conn, original_close, "ws"))
+        == "closed"
+    )
+    assert len(close_calls) == 1
+    assert warnings and "RuntimeError" in warnings[0]
+    assert conn._lingxi_live_detect_pending is False
+
+    async def cancelled_unregister(_conn):
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(
+        module, "_unregister_control_connection", cancelled_unregister
+    )
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(module._close_with_control_cleanup(conn, original_close, None))
+    assert len(close_calls) == 2
+
+
 def test_agent_catalog_marks_current_binding_and_unavailable_entries(monkeypatch) -> None:
     plugins_func = ModuleType("plugins_func")
     register = ModuleType("plugins_func.register")
@@ -1434,11 +2094,9 @@ def test_agent_hot_switch_requires_host_and_session_disambiguation(monkeypatch) 
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    # Simulate a reviewed deployment configuration where one Agent id exists
-    # on both hosts; the public synthetic defaults intentionally do not assume
-    # any such overlap.
-    module._PROFILES = [*module._PROFILES, "game-assistant"]
-    module._DSH_PRESETS = [*module._DSH_PRESETS, "game-assistant"]
+    # This fixture intentionally exposes the same synthetic name on both hosts.
+    monkeypatch.setattr(module, "_PROFILES", [*module._PROFILES, "game-assistant"])
+    monkeypatch.setattr(module, "_DSH_PRESETS", [*module._DSH_PRESETS, "game-assistant"])
     clock = {"now": 100.0}
     monkeypatch.setattr(module, "monotonic", lambda: clock["now"])
 
@@ -1453,8 +2111,8 @@ def test_agent_hot_switch_requires_host_and_session_disambiguation(monkeypatch) 
             calls.append(("list", session_id, host, profile, limit))
             return {
                 "sessions": [
-                    {"id": "session-latest", "title": "游戏最近对话"},
-                    {"id": "session-older", "title": "游戏旧对话"},
+                    {"id": "session-latest", "title": "三兵最近对话"},
+                    {"id": "session-older", "title": "三兵旧对话"},
                 ]
             }
 
@@ -1479,9 +2137,9 @@ def test_agent_hot_switch_requires_host_and_session_disambiguation(monkeypatch) 
                 "profile": profile,
                 "stored_session_id": stored_session_id,
                 "title": (
-                    "游戏旧对话"
+                    "三兵旧对话"
                     if stored_session_id == "session-older"
-                    else "游戏最近对话"
+                    else "三兵最近对话"
                 ),
             }
 
@@ -1544,7 +2202,7 @@ def test_agent_hot_switch_requires_host_and_session_disambiguation(monkeypatch) 
     responses = asyncio.run(choose_twice())
     assert all(response.action == "response" for response in responses)
     assert sum("deepseek-harness" in response.response for response in responses) == 1
-    assert sum("游戏旧对话" in response.response for response in responses) == 1
+    assert sum("三兵旧对话" in response.response for response in responses) == 1
     assert sum(
         "已被处理" in response.response or "没有等待选择" in response.response
         for response in responses
