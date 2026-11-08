@@ -166,11 +166,12 @@ def test_binding_store_rejects_unknown_fields(tmp_path: Path) -> None:
         BindingStore(path).get("device-a")
 
 
-def test_default_store_is_external_to_repository() -> None:
-    path = default_binding_store_path(
-        {"LOCALAPPDATA": "C:\\Users\\Example\\AppData\\Local"}
-    )
+def test_default_store_is_external_to_repository(tmp_path: Path) -> None:
+    local_app_data = tmp_path / "AppData" / "Local"
+    path = default_binding_store_path({"LOCALAPPDATA": str(local_app_data)})
 
-    assert str(path).lower().endswith(
-        "appdata\\local\\agent-workflow-hub\\xiaozhi-hermes-bindings.json"
-    )
+    assert path == (
+        local_app_data / "agent-workflow-hub" / "xiaozhi-hermes-bindings.json"
+    ).resolve()
+    repository = Path(__file__).resolve().parents[3]
+    assert not path.is_relative_to(repository)
