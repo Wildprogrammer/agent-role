@@ -348,7 +348,7 @@ class DeepSeekHarnessWebGateway:
     def _page(self, session_id: str, through_seq: int) -> tuple[Mapping[str, object], ...]:
         value = self._mapping(
             self._rpc(
-                "session/page",
+                "session/events" if self.version == "0.2.2-rc.1" else "session/page",
                 {
                     "request": {
                         "address": {"kind": "session", "sessionId": session_id},
@@ -463,7 +463,7 @@ class DeepSeekHarnessWebGateway:
         for attachment in attachments:
             receipt_id = self._upload_attachment(stored_session_id, attachment)
             content.append({"type": "file", "receiptId": receipt_id})
-        self._rpc(
+        admission = self._rpc(
             "session/prompt",
             {
                 "request": {
@@ -475,6 +475,12 @@ class DeepSeekHarnessWebGateway:
                 }
             },
         )
+        if not isinstance(admission, Mapping) or admission.get("accepted") is not True:
+            # A POST has already occurred. Never infer that a malformed reply is
+            # safe to replay, or poll unrelated turns as if admission succeeded.
+            raise DshGatewayError(
+                "DSH prompt admission was not confirmed", outcome_unknown=True
+            )
         last_progress = ""
         for _ in range(self._max_polls):
             try:
@@ -564,6 +570,10 @@ class DeepSeekHarnessWebGateway:
             f"?sessionId={quote(session_id, safe='')}"
             f"&name={quote(attachment.name, safe='')}"
         )
+        if self.version == "0.2.2-rc.1" and attachment.kind == "image":
+            # New native streaming image intake normalizes/stages a vision
+            # attachment. Without mediaType this endpoint stores an opaque file.
+            url += f"&mediaType={quote(attachment.media_type, safe='')}"
 
         def chunks() -> Iterator[bytes]:
             with attachment.path.open("rb") as stream:

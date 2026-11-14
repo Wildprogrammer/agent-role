@@ -157,7 +157,7 @@ foreach ($name in @(
 
 try {
     if ($null -ne $dshConfig) {
-        $supportedDshVersions = @('0.2.0-rc.2', '0.2.1-rc.5')
+        $supportedDshVersions = @('0.2.0-rc.2', '0.2.1-rc.5', '0.2.2-rc.1')
         if ($dshConfig.expected_version -notin $supportedDshVersions) {
             throw 'DeepSeek Harness expected_version is not supported.'
         }

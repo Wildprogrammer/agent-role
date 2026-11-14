@@ -14,7 +14,7 @@ from urllib.parse import urlsplit
 _PROFILE_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 _SESSION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _ENV_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
-SUPPORTED_DSH_VERSIONS = ("0.2.0-rc.2", "0.2.1-rc.5")
+SUPPORTED_DSH_VERSIONS = ("0.2.0-rc.2", "0.2.1-rc.5", "0.2.2-rc.1")
 _IDEMPOTENCY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$")
 _ATTACHMENT_ID_RE = re.compile(r"^att_[a-f0-9]{32}$")
 _SHA256_RE = re.compile(r"^[a-f0-9]{64}$")

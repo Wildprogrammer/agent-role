@@ -131,7 +131,7 @@ def test_managed_dsh_startup_keeps_launch_token_off_disk_and_kills_with_parent()
     assert ".stdout.log" not in script
     assert "DshRuntimeRoot" not in script
     assert "dshConfig.dsh_home" in script
-    assert "'0.2.0-rc.2', '0.2.1-rc.5'" in script
+    assert "'0.2.0-rc.2', '0.2.1-rc.5', '0.2.2-rc.1'" in script
     assert "CancelDshSessionOnStart" in script
     assert "desktop-cancel-session" in script
     assert "RemoveDshQueuedItemSessionOnStart" in script

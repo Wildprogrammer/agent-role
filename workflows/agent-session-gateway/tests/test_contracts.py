@@ -86,7 +86,7 @@ def test_config_rejects_secret_value_and_duplicate_profiles() -> None:
         BridgeConfig.from_mapping(mapping)
 
 
-@pytest.mark.parametrize("version", ("0.2.0-rc.2", "0.2.1-rc.5"))
+@pytest.mark.parametrize("version", ("0.2.0-rc.2", "0.2.1-rc.5", "0.2.2-rc.1"))
 def test_config_accepts_closed_deepseek_web_contract(
     tmp_path: Path, version: str
 ) -> None:

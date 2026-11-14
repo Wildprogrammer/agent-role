@@ -1,7 +1,7 @@
 ---
 name: agent-session-gateway
 description: Use when an external channel such as Lingxi/Xiaozhi or XiaoAi needs to bind to and continue an existing canonical conversation on a supported Agent host, while preserving host isolation, confirmation, authentication, deduplication, attachments, and optional device capabilities.
-compatibility: Agent Workflow Hub spec 1.0; pinned xiaozhi-esp32-server v0.9.7 on Windows with Python 3.10; Python 3.11+, Hermes Agent 0.21 legacy serve or 0.22+ native gateway, and DeepSeek Harness Web 0.2.0-rc.2 or 0.2.1-rc.5; hardware is optional for software validation.
+compatibility: Agent Workflow Hub spec 1.0; pinned xiaozhi-esp32-server v0.9.7 on Windows with Python 3.10; Python 3.11+, Hermes Agent 0.21 legacy serve or 0.22+ native gateway, and DeepSeek Harness Web 0.2.0-rc.2, 0.2.1-rc.5 or 0.2.2-rc.1; hardware is optional for software validation.
 metadata:
   spec-version: "1.0"
   workflow-version: "0.9.3"
@@ -69,7 +69,7 @@ Hermes Profile 白名单完全由仓库外桥接配置的 `profiles` 数组提�
 
 小爱 MCP 工具固定为 `list_agents`、`list_sessions`、`show_binding`、`bind_session`、`prepare_attachment_upload`、`send_message`。会话列表只返回 ID、标题和最小时间/计数/运行状态，不返回 preview、cwd 或历史正文。首次绑定必须指向刚列出的真实会话；已有绑定的改绑先返回 180 秒一次性 `confirmation_id`，只有用户明确确认后以相同目标和编号再次调用才落盘。`prepare_attachment_upload` 绑定当时完整 binding snapshot，返回预分配的 `attachment_id` 和只含高熵一次性 token 的短时 HTTPS 上传页；不得复用长期 MCP Bearer。上传流式写入临时文件，校验大小、扩展名、MIME、魔数或 UTF-8 文本后原子发布；允许 JPEG、PNG、WebP、PDF、TXT、MD、CSV、JSON，拒绝未知类型、SVG/HTML、脚本、可执行文件、压缩包和 Office 文件。单文件上限 50 MiB，每条消息最多 4 个附件且合计最多 100 MiB；Hermes 图片另受 25 MiB 上限。`send_message` 要求客户端提供稳定 `request_id`，正文先受字符上限约束，可选 `attachment_ids` 只能引用已完成且绑定快照仍匹配的附件；同一进程缓存窗口内重复 ID+正文+相同附件集合只回放原结果，ID 相同而正文或附件不同则拒绝；未知结果和请求取消同样缓存且禁止自动重发。缓存 TTL 从宿主调用完成时开始，统一执行过期清理与 256 条硬上限；确定未写入宿主的未绑定/参数拒绝不占用写入去重缓存。这是有限去重，不承诺客户端用新 ID 重新发送时的 exactly-once。
 
-可选 `deepseek_harness` 块只接受数值回环 HTTP origin、仓库外绝对 `dsh_home`、精确版本 `0.2.0-rc.2` 或 `0.2.1-rc.5`、只保存变量名的 `launch_token_env` 和显式 `allowed_presets`。每个实例必须声明并匹配其中一个版本，不接受 `latest`、范围、自动降级或跨版本静默回退。启动凭据由 DSH Web 每次启动生成，只能暂存在父进程环境和网关内存中，不写入配置、绑定、响应或持久日志。Preset 白名单由外部配置的 `allowed_presets` 明确提供，公开示例不附带维护者的真实列表。
+可选 `deepseek_harness` 块只接受数值回环 HTTP origin、仓库外绝对 `dsh_home`、精确版本 `0.2.0-rc.2`、`0.2.1-rc.5` 或 `0.2.2-rc.1`、只保存变量名的 `launch_token_env` 和显式 `allowed_presets`。每个实例必须声明并匹配其中一个版本，不接受 `latest`、范围、自动降级或跨版本静默回退。启动凭据由 DSH Web 每次启动生成，只能暂存在父进程环境和网关内存中，不写入配置、绑定、响应或持久日志。Preset 白名单由外部配置的 `allowed_presets` 明确提供，公开示例不附带维护者的真实列表。各版本的会话接口和升级验证见 [DSH Web 兼容说明](references/deepseek-harness-compatibility.md)。
 
 Desktop 共享模式另有一个仓库外绑定文件，默认位于 `%LOCALAPPDATA%\agent-workflow-hub\xiaozhi-hermes-bindings.json`，可用 `XIAOZHI_HERMES_BINDING_STORE` 指向绝对路径。绑定键必须使用 Xiaozhi 稳定 `device_id`，不能使用每次 WebSocket 重连都会变化的 `session_id`。文件只保存设备 ID、host、Profile/Preset、宿主 session ID、标题和 revision，不保存 Hermes/DSH 会话令牌、聊天内容或 API 密钥，并使用临时文件加原子替换写入。旧 1.0/1.1 绑定在读取时解释为 `host=hermes`，下一次写入迁移到 1.2。
 
@@ -96,7 +96,7 @@ Hermes Desktop 传输优先使用 0.22+ 原生 Gateway：通过 Hermes 安装器
 - `dispatch_bound_voice`：仅供受信 Xiaozhi 私有父进程提交最终普通语音；只有 `bound_voice_dispatch_mode=direct` 时免逐条确认，并禁止携带 `confirmed`。两种共享发送都必须携带读取绑定时的 `host`、Profile/Preset、宿主 session ID 和 binding revision；桥接在跨进程设备操作锁内重新匹配该不可变快照，再完成唯一一次宿主写入；
 - `dispatch_bound_voice` 只有在私有父进程显式发送 `stream_progress: true` 后，才可在最终响应前发送 `status=progress` 的累计公开正文；旧单帧客户端未协商时永远只收到最终帧。Hermes 可投递累计增量，DeepSeek Harness 仅在 durable `turn/end` 后投递已确认的最终正文，避免中间 assistant message 覆盖最终结论。父进程只把进度帧用于同一设备、同一 TTS generation 和不可变 sentence ID 的动态字幕与有界分句 TTS，不把它当作第二次宿主写入；停止后旧 generation 的进度、最终补句和字幕必须全部丢弃。`cancel_bound_voice` 只能由受信私有父进程携带当前 in-flight 快照调用，通过独立控制子进程执行 Hermes `session.interrupt` 或 DeepSeek Harness `session/cancel`，并保留 cancelling 墓碑直至数据面与控制面都收敛，期间禁止下一回合；DSH `{accepted:true}` 只返回 `requested`，不得冒充已观察到 `cancelled`；
 - `create_session`：使用准备时的绑定快照调用原生 `session.create`，必须包含不可复用到其他逻辑操作的 `idempotency_key` 和 `confirmed: true`；明确成功后才以 CAS 原子改绑设备，旧会话不删除；
-- `compress_session`：Hermes 按准备时的绑定快照恢复会话后调用原生 `session.compress`，始终要求 `confirmed: true`；只有明确 `compressed` 且返回 replacement stored session ID 时才以 CAS 更新绑定。DSH `0.2.0-rc.2` 与 `0.2.1-rc.5` 本阶段均未提供经过网关验证的压缩契约，因此明确返回不支持，不把文字“压缩上下文”作为普通 prompt 发送。
+- `compress_session`：Hermes 按准备时的绑定快照恢复会话后调用原生 `session.compress`，始终要求 `confirmed: true`；只有明确 `compressed` 且返回 replacement stored session ID 时才以 CAS 更新绑定。DSH 三个受支持版本目前均未提供经过网关验证的压缩契约，因此明确返回不支持，不把文字“压缩上下文”作为普通 prompt 发送。
 
 ## 输出与命名规则
 
@@ -132,7 +132,7 @@ Hermes 原生 `session.create` 会立即生成 live runtime/stored ID，但无 s
 
 1. 完整读取本 Skill、桥接三个 JSON Schema；涉及能力中心、诊断、更新或恢复时再完整读取五个 `device-*` / `release-manifest` Schema；同时读取 `references/xiaozhi-server-v0.9.7.md` 和外部桥接配置，确认请求来自配置命名的唯一受信 Xiaozhi 服务端父进程。
 2. 检查上游 checkout 的精确 commit，再以安装器 dry-run 检查四个目标；只有用户已批准的软件部署范围内才使用 `--apply`。不同内容的目标文件必须停下审查，不能强制覆盖。
-3. 运行 `doctor` 检查配置、摘要和桥接环境变量；它不宣称实时就绪。随后用 Hermes 原生命令只读检查版本、Profile 注册和每个目标的 `platforms.api_server.enabled`；若配置 DSH，再检查 Web 包精确匹配配置声明的 `0.2.0-rc.2` 或 `0.2.1-rc.5`、同一 Web origin 可认证以及白名单 Preset 健康。任一项不足时明确报告对应宿主不可用，不把请求回退到另一宿主。
+3. 运行 `doctor` 检查配置、摘要和桥接环境变量；它不宣称实时就绪。随后用 Hermes 原生命令只读检查版本、Profile 注册和每个目标的 `platforms.api_server.enabled`；若配置 DSH，再检查 Web 包精确匹配配置声明的 `0.2.0-rc.2`、`0.2.1-rc.5` 或 `0.2.2-rc.1`、同一 Web origin 可认证以及白名单 Preset 健康。任一项不足时明确报告对应宿主不可用，不把请求回退到另一宿主。
 4. 用 `simulate` 验证桥接协议，再运行插件验证器。启动回环服务后，用 `simulate-websocket` 验证“列表 → 切换 → 再列表”、普通正文直接进入当前绑定，以及“生命周期准备 → 取消”。静音测试 TTS 只证明协议事件，不代表真实语音验收。
 5. 明确控制短语由本地兼容适配器确定性路由：统一列出 Agent、按 host 列会话、绑定、确认、取消、开启新会话和压缩上下文；其余最终非空语音直接交给当前稳定绑定。会话控制不得交给基础聊天模型猜测或作为普通 prompt 提交。“清除/清空/重置上下文”必须先追问是压缩当前会话还是开启空白新会话，澄清后再准备并确认，绝不删除历史。正文中只是提到这些短语时按普通正文处理。
 6. 用户明确批准当前配置的白名单、调用方身份、确认规则和实时提交范围后，把 `doctor` 返回的精确 `config_sha256` 作为启动参数。字节不一致必须拒绝启动。
@@ -180,7 +180,7 @@ Hermes 原生 `session.create` 会立即生成 live runtime/stored ID，但无 s
 - `list_agents` 同时返回 Hermes Profile 和 DSH Preset 且每项携带 host；绑定 DeepSeek Harness 后发送只调用 DSH Web，绑定 Hermes 后只调用 Hermes Desktop，不广播、不自动回退。
 - 普通“Profile / 智能体 / Agent 列表”必须确定性调用统一目录并完整按 host 返回；同名 Agent 的热切换先选择 host，再选择已有会话，切换未完成期间同一设备的任何连接都不能把正文提交给旧绑定，取消或过期后原绑定保持不变。
 - `bound_agent` 是生产默认网关模式，不构造 OpenAI/Ollama 客户端；远端基础 LLM 与本地 Ollama 是两个可选显式配置，缺少远端 API key 时必须拒绝切换或继续保留已运行的旧配置，二者都不得作为故障回退。
-- DeepSeek Harness 只接受精确版本 `0.2.0-rc.2` 或 `0.2.1-rc.5` 和数值回环 Web origin；每个实例只选择一个匹配已安装包的版本，launch token 不出现在配置、响应、绑定文件或残留 stdout 日志。
+- DeepSeek Harness 只接受精确版本 `0.2.0-rc.2`、`0.2.1-rc.5` 或 `0.2.2-rc.1` 和数值回环 Web origin；每个实例只选择一个匹配已安装包的版本，launch token 不出现在配置、响应、绑定文件或残留 stdout 日志。
 - “开启/新建/重新开始会话”必须确定性进入准备门，确认后恰好调用一次原生 `session.create`，成功后 CAS 改绑，失败或结果未知时保留旧绑定；旧会话不删除。
 - 会话控制短语只按规范化后的完整用户话语精确匹配；正文中仅包含“开启新会话”或“压缩上下文”不得触发生命周期工具。显式“交给当前智能体：<正文>”作为兼容别名剥离前缀后直接提交一次，不进入普通消息确认门。
 - “压缩上下文/压缩当前会话”必须确定性进入准备门，确认后恢复当前会话并调用原生 `session.compress`；压缩使用不少于 660 秒的独立 RPC 等待，恢复时省略历史传输。只有明确 `compressed` 与 replacement ID 才改绑；`aborted`、`pending`、畸形响应或断线不得宣称成功。

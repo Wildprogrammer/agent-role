@@ -20,7 +20,7 @@ physical voice system additionally needs:
 - `xiaozhi-esp32-server` v0.9.7 at commit
   `87c6df77b0220ddbd8fc804f984f83f69f3225e5`;
 - at least one supported Agent Host: Hermes Agent 0.21+ or DeepSeek Harness Web
-  0.2.0-rc.2 or 0.2.1-rc.5;
+  0.2.0-rc.2, 0.2.1-rc.5, or 0.2.2-rc.1;
 - the server-side ASR, VAD, and TTS dependencies selected by the operator;
 - supported ESP32-S3 hardware and audio modules.
 
@@ -33,7 +33,7 @@ public tunnel manager.
 | --- | --- |
 | Agent Workflow Hub and Gateway | Python 3.11+ |
 | Pinned Xiaozhi server | Python 3.10 in an isolated environment |
-| Managed DeepSeek Harness | Node.js plus DSH 0.2.0-rc.2 or 0.2.1-rc.5 |
+| Managed DeepSeek Harness | Node.js plus DSH 0.2.0-rc.2, 0.2.1-rc.5, or 0.2.2-rc.1 |
 | Lingxi firmware build | ESP-IDF release/v6.1; see the firmware repository |
 
 Do not install the Hub package into the Python 3.10 Xiaozhi environment. The
@@ -75,6 +75,9 @@ or Agent inventory.
 
 Hermes 0.22+ 使用原生 gateway 与一次性连接 ticket，并显式查询 stored 会话；
 旧版 legacy serve 路径继续保留，不把两种凭据机制混用。
+
+For DSH upgrades and supported session operations, see
+[DeepSeek Harness Web compatibility](references/deepseek-harness-compatibility.md).
 
 ## Compatibility names
 

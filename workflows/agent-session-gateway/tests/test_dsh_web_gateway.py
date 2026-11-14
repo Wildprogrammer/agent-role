@@ -87,7 +87,7 @@ class FakeClient:
             "session/cancel": {"accepted": True},
             "session/updateQueue": {"accepted": True},
         }
-        if method == "session/page":
+        if method in {"session/page", "session/events"}:
             value: object = {
                 "records": [
                     {
@@ -202,7 +202,7 @@ def test_unsupported_expected_version_is_rejected_before_authentication(
         )
 
 
-@pytest.mark.parametrize("version", ("0.2.0-rc.2", "0.2.1-rc.5"))
+@pytest.mark.parametrize("version", ("0.2.0-rc.2", "0.2.1-rc.5", "0.2.2-rc.1"))
 def test_each_supported_version_passes_the_exact_version_gate(
     tmp_path: Path, version: str
 ) -> None:
@@ -216,6 +216,62 @@ def test_each_supported_version_passes_the_exact_version_gate(
     )
 
     assert adapter.version == version
+
+
+@pytest.mark.parametrize(
+    ("version", "event_method", "image_media_type"),
+    (
+        ("0.2.0-rc.2", "session/page", None),
+        ("0.2.1-rc.5", "session/page", None),
+        ("0.2.2-rc.1", "session/events", ["image/png"]),
+    ),
+)
+def test_version_selects_event_reader_and_image_upload(
+    tmp_path: Path, version: str, event_method: str, image_media_type: list[str] | None,
+) -> None:
+    from urllib.parse import parse_qs, urlsplit
+
+    client = FakeClient()
+    instance = DeepSeekHarnessWebGateway(
+        base_url="http://127.0.0.1:5000", launch_token="secret-launch-token",
+        dsh_home=dsh_home(tmp_path, version), expected_version=version,
+        allowed_presets=("assistant-agent",), client=client, sleep=lambda _: None,
+    )
+    path = tmp_path / "photo.png"
+    data = b"synthetic-image-bytes"
+    path.write_bytes(data)
+    attachment = BridgeAttachment(
+        attachment_id="att_" + "a" * 32, path=path, name="photo.png",
+        media_type="image/png", kind="image", bytes=len(data),
+        sha256=hashlib.sha256(data).hexdigest(),
+    )
+    result = instance.send_to_session(profile="assistant-agent", stored_session_id="dsh-session-1",
+                                      text="describe", attachments=(attachment,))
+    assert result.status == "complete" and result.text == "shared answer"
+    assert parse_qs(urlsplit(client.uploads[0][0]).query).get("mediaType") == image_media_type
+    assert client.uploads[0][1] == data
+    assert [method for method, _ in client.calls if method in {"session/page", "session/events"}] == [
+        event_method,
+    ]
+    assert instance.cancel_session("dsh-session-1") == "requested"
+
+
+@pytest.mark.parametrize("admission", [None, {}, {"accepted": False}, {"accepted": "true"}])
+def test_ambiguous_prompt_admission_never_replays_or_polls(tmp_path: Path, admission) -> None:
+    class Client(FakeClient):
+        def post(self, url, **kwargs):
+            result = super().post(url, **kwargs)
+            if kwargs["json"]["method"] == "session/prompt":
+                result._value["result"]["value"] = admission
+            return result
+    client = Client()
+    with pytest.raises(DshGatewayError) as error:
+        gateway(tmp_path, client).send_to_session(
+            profile="assistant-agent", stored_session_id="dsh-session-1", text="test"
+        )
+    assert error.value.outcome_unknown
+    assert [m for m, _ in client.calls].count("session/prompt") == 1
+    assert not any(m in {"session/page", "session/events"} for m, _ in client.calls)
 
 
 def test_lists_allowlisted_presets_and_their_sessions(tmp_path: Path) -> None:
