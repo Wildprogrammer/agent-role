@@ -298,6 +298,29 @@ def test_module_does_not_export_general_delete_or_clean() -> None:
     assert not hasattr(filesystem, "clean")
 
 
+def test_transaction_preserves_external_edit_after_preflight(tmp_path, monkeypatch):
+    import agent_workflow_hub.specialized_agent_deployment.filesystem as filesystem
+
+    first = tmp_path / "preset"
+    shared = tmp_path / "profile"
+    shared.write_bytes(b"original")
+    real_replace = filesystem._atomic_replace
+
+    def edit_profile_before_second_write(path, content):
+        real_replace(path, content)
+        if path == first:
+            shared.write_bytes(b"external edit")
+
+    monkeypatch.setattr(filesystem, "_atomic_replace", edit_profile_before_second_write)
+    with pytest.raises(TransactionApplyError, match="source digest changed"):
+        apply_managed_transaction((
+            ManagedWrite(target=first, content=b"created", expected_before_sha256=None),
+            ManagedWrite(target=shared, content=b"new", expected_before_sha256=digest(b"original")),
+        ), backup_root=tmp_path / "backups")
+    assert shared.read_bytes() == b"external edit"
+    assert not first.exists()
+
+
 @pytest.mark.skipif(os.name != "nt", reason="Windows long-path regression")
 @pytest.mark.parametrize("fail_after_write", [False, True])
 def test_long_backup_path_supports_update_and_rollback(tmp_path, monkeypatch, fail_after_write):

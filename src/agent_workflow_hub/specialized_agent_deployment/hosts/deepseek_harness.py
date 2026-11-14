@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -32,6 +33,14 @@ from ..filesystem import (
 from ..runner import CommandRunner
 from ..sources import SourceSnapshotError, snapshot_skill
 from .base import ApplyContext, FinalizeContext, HostApplyResult, VerifyContext
+from .deepseek_harness_v2 import (
+    DSH_V2_STANDARD_PATCH_SHA256_BY_VERSION,
+    DeepSeekHarnessV2Error,
+    extract_v2_preset,
+    merge_v2_preset,
+    render_v2_preset_patch,
+    v2_preset_conflicts,
+)
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -272,13 +281,14 @@ def _agent_source(request: DeploymentRequest, facts: HostFacts) -> str:
     return _stable_bytes(path).decode("utf-8")
 
 
-def _marker_bytes(request: DeploymentRequest) -> bytes:
+def _marker_bytes(request: DeploymentRequest, persona: str) -> bytes:
     return json.dumps(
         {
             "schema_version": request.schema_version,
             "deployment_id": request.deployment_id,
             "agent_id": request.agent_id,
             "host": "deepseek-harness",
+            "persona_sha256": _sha256(persona.encode("utf-8")),
         },
         ensure_ascii=False,
         sort_keys=True,
@@ -352,24 +362,216 @@ class DeepSeekHarnessAdapter:
         }
 
     @staticmethod
-    def _options(request: DeploymentRequest) -> tuple[Path, Path]:
+    def _options(request: DeploymentRequest) -> tuple[Path, Path | None, bool]:
         options = request.host_options
-        required = {"dsh_home", "runtime_root", "profile"}
-        if not required <= set(options) or set(options) - required - {"mcp_servers"} or options.get("profile") != "web":
+        required = {"dsh_home", "profile"}
+        allowed = required | {"runtime_root", "mcp_servers", "schedule"}
+        if not required <= set(options) or set(options) - allowed or options.get("profile") != "web":
             raise DeepSeekHarnessAdapterError(
-                "DeepSeek host_options require dsh_home, runtime_root, profile=web; optional mcp_servers"
+                "DeepSeek host_options require dsh_home and profile=web; optional runtime_root, mcp_servers, schedule"
             )
         dsh_home = Path(cast(str, options["dsh_home"]))
-        runtime_root = Path(cast(str, options["runtime_root"]))
-        if not dsh_home.is_absolute() or not runtime_root.is_absolute():
+        runtime_value = options.get("runtime_root")
+        runtime_root = Path(cast(str, runtime_value)) if runtime_value is not None else None
+        if not dsh_home.is_absolute() or (
+            runtime_root is not None and not runtime_root.is_absolute()
+        ):
             raise DeepSeekHarnessAdapterError("DeepSeek host roots must be absolute")
-        return dsh_home, runtime_root
+        schedule = options.get("schedule", {"enabled": False})
+        if (
+            not isinstance(schedule, Mapping)
+            or set(schedule) != {"enabled"}
+            or type(schedule.get("enabled")) is not bool
+        ):
+            raise DeepSeekHarnessAdapterError(
+                "DeepSeek schedule must be the closed object {enabled: boolean}"
+            )
+        return dsh_home, runtime_root, cast(bool, schedule["enabled"])
+
+    def _discover_v2(
+        self,
+        request: DeploymentRequest,
+        *,
+        dsh_home: Path,
+        version: str,
+        schedule_enabled: bool,
+        servers: tuple[dict[str, object], ...],
+    ) -> HostFacts:
+        profile_modules = dsh_home / "profiles/node_modules/@deepseek-ai"
+        profile_path = dsh_home / "profiles/web/package.json"
+        profile_patch = dsh_home / "profiles/web/cordis.patch.yml"
+        standard_patch = profile_modules / "dsh-web-app/presets/standard.patch.yml"
+        dsh_package = profile_modules / "dsh/package.json"
+        try:
+            resolved_package_root = dsh_package.resolve(strict=True).parent.parent
+        except OSError:
+            resolved_package_root = None
+        packages = [
+            "dsh",
+            "dsh-base",
+            "dsh-web-app",
+            "dsh-persona",
+            "dsh-agent-instructions",
+            "dsh-skill-filesystem",
+            "dsh-tool-skill",
+            *(
+                ("dsh-agent-preset", "dsh-agent-preset-registry", "dsh-tool-subagent-control")
+                if version == "0.2.2-rc.1"
+                else ()
+            ),
+            *(("dsh-time-context", "dsh-tool-schedule") if schedule_enabled else ()),
+            *(("dsh-mcp-client",) if servers else ()),
+        ]
+        web_modules = dsh_home / "profiles/web/node_modules/@deepseek-ai"
+        package_paths = {}
+        for name in packages:
+            candidates = (
+                profile_modules / name / "package.json",
+                web_modules / name / "package.json",
+                *(
+                    (resolved_package_root / name / "package.json",)
+                    if resolved_package_root is not None
+                    else ()
+                ),
+            )
+            package_paths[name] = next(
+                (path for path in candidates if path.is_file()), candidates[0]
+            )
+        required = (profile_path, profile_patch, standard_patch, *package_paths.values())
+        missing = [str(path) for path in required if not path.is_file()]
+        target_root = dsh_home / ".agent-presets" / request.agent_id
+        if missing:
+            return HostFacts(
+                host="deepseek-harness",
+                compatibility="missing",
+                version=None,
+                target_root=str(target_root),
+                facts={
+                    "generation": "profile-v2",
+                    "missing_evidence": missing,
+                    "guidance": ["请先完成 DeepSeek Harness 0.2 Web Profile 安装。"],
+                },
+            )
+        versions = {
+            name: cast(str | None, read_json_object(path).get("version"))
+            for name, path in package_paths.items()
+        }
+        package_versions_ok = all(value == version for value in versions.values())
+        standard_sha = _sha256(_stable_bytes(standard_patch))
+        expected_standard_sha = DSH_V2_STANDARD_PATCH_SHA256_BY_VERSION.get(version)
+        profile = read_json_object(profile_path)
+        dsh = profile.get("dsh")
+        profile_config = dsh.get("profile") if isinstance(dsh, Mapping) else None
+        bundles = profile_config.get("bundles", []) if isinstance(profile_config, Mapping) else []
+        patch_reload = (
+            profile_config.get("patchReload")
+            if isinstance(profile_config, Mapping)
+            else None
+        )
+        web_profile_ok = (
+            isinstance(bundles, list)
+            and all(isinstance(bundle, str) for bundle in bundles)
+            and {
+                "@deepseek-ai/dsh-base",
+                "@deepseek-ai/dsh-web-app",
+            }
+            <= set(cast(list[str], bundles))
+            and patch_reload in (None, "live")
+        )
+        subagent_control_root_available = True
+        if version == "0.2.2-rc.1":
+            exports = read_json_object(package_paths["dsh-tool-subagent-control"]).get("exports")
+            # In 0.2.2 list_agents is registered by the package root. The old
+            # /list-agents subpath is intentionally absent and must not be a gate.
+            subagent_control_root_available = isinstance(exports, Mapping) and "." in exports
+        missing_mcp_paths = [
+            str(server[field])
+            for server in servers
+            for field in ("command", "cwd")
+            if not (
+                Path(cast(str, server[field])).is_file()
+                if field == "command"
+                else Path(cast(str, server[field])).is_dir()
+            )
+        ]
+        exact = (
+            package_versions_ok
+            and expected_standard_sha is not None
+            and standard_sha == expected_standard_sha
+            and web_profile_ok
+            and subagent_control_root_available
+            and not missing_mcp_paths
+        )
+        facts: dict[str, object] = {
+            "generation": "profile-v2",
+            "dsh_home": str(dsh_home),
+            "profile_version": version,
+            "profile_package_versions": versions,
+            "profile_versions_consistent": package_versions_ok,
+            "standard_patch": str(standard_patch),
+            "standard_patch_sha256": standard_sha,
+            "profile_patch": str(profile_patch),
+            "profile_patch_sha256": _sha256(_stable_bytes(profile_patch)),
+            "web_profile_package": str(profile_path),
+            "web_profile_ok": web_profile_ok,
+            "subagent_control_root_available": subagent_control_root_available,
+            "patch_reload": patch_reload,
+            "schedule_enabled": schedule_enabled,
+            "mcp_servers": list(servers),
+            "missing_mcp_paths": missing_mcp_paths,
+        }
+        if not exact:
+            guidance = []
+            if not subagent_control_root_available:
+                guidance.append(
+                    "DSH 0.2.2 的 dsh-tool-subagent-control 根入口不可用。"
+                )
+            if expected_standard_sha is None or standard_sha != expected_standard_sha:
+                guidance.append(
+                    "DSH 0.2 Profile 的 standard.patch.yml 未匹配任何已验证版本摘要。"
+                )
+            if not package_versions_ok or not web_profile_ok:
+                guidance.append(
+                    "DSH 0.2 Profile 包版本或 Web bundle 配置不一致。"
+                )
+            facts["guidance"] = guidance or [
+                "DSH 0.2 Profile 包版本、standard.patch.yml 摘要或 Web 配置与已验证基线不一致。"
+            ]
+        return HostFacts(
+            host="deepseek-harness",
+            compatibility="verified" if exact else "unverified",
+            version=version,
+            target_root=str(target_root),
+            facts=facts,
+        )
 
     def discover(self, request: DeploymentRequest) -> HostFacts:
         if request.host != "deepseek-harness":
             raise DeepSeekHarnessAdapterError("request is not for DeepSeek Harness")
-        dsh_home, runtime_root = self._options(request)
+        dsh_home, runtime_root, schedule_enabled = self._options(request)
         servers = _mcp_servers(request)
+        dsh_package = dsh_home / "profiles/node_modules/@deepseek-ai/dsh/package.json"
+        if dsh_package.is_file():
+            version = read_json_object(dsh_package).get("version")
+            if type(version) is str and cast(str, version).startswith("0.2."):
+                return self._discover_v2(
+                    request,
+                    dsh_home=dsh_home,
+                    version=version,
+                    schedule_enabled=schedule_enabled,
+                    servers=servers,
+                )
+        if runtime_root is None:
+            return HostFacts(
+                host="deepseek-harness",
+                compatibility="missing",
+                version=None,
+                target_root=str(dsh_home / ".agent-presets" / request.agent_id),
+                facts={
+                    "missing_evidence": ["host_options.runtime_root"],
+                    "guidance": ["DSH 0.1.x 兼容路径仍需要 runtime_root。"],
+                },
+            )
         profile_modules = dsh_home / "profiles/node_modules/@deepseek-ai"
         profile_package_names = (
             *_PROFILE_PACKAGE_NAMES,
@@ -551,6 +753,152 @@ class DeepSeekHarnessAdapter:
     def behavior_prompt_sha256(self, request: DeploymentRequest) -> str:
         return _sha256(self.behavior_prompt(request).encode("utf-8"))
 
+    def _v2_preset_patch(
+        self,
+        request: DeploymentRequest,
+        persona: str,
+        facts: HostFacts,
+    ) -> str:
+        try:
+            return render_v2_preset_patch(
+                _stable_bytes(Path(cast(str, facts.facts["standard_patch"]))).decode("utf-8"),
+                agent_id=request.agent_id,
+                display_name=request.display_name,
+                purpose=request.purpose,
+                persona=persona,
+                provider_name=f"agent-workflow-hub-{request.agent_id}",
+                skill_root=Path(facts.target_root or "") / "skills",
+                schedule_enabled=facts.facts.get("schedule_enabled") is True,
+                mcp_servers=_mcp_servers(request, deployed=True),
+            )
+        except (UnicodeDecodeError, DeepSeekHarnessV2Error) as exc:
+            raise DeepSeekHarnessAdapterError(str(exc)) from exc
+
+    def _plan_v2_writes(
+        self,
+        request: DeploymentRequest,
+        snapshots: tuple[SkillSnapshot, ...],
+        persona: str,
+        facts: HostFacts,
+    ) -> tuple[WriteIntent, ...]:
+        target_root = Path(facts.target_root or "")
+        preset = self._v2_preset_patch(request, persona, facts).encode("utf-8")
+        profile_patch = Path(cast(str, facts.facts["profile_patch"]))
+        try:
+            original = _stable_bytes(profile_patch)
+            current = original.decode("utf-8")
+            if request.agent_id in {"standard", "minimal", "ptc", "cordis"}:
+                raise DeepSeekHarnessV2Error("DSH Web Profile already registers this preset ID")
+            if request.mode == "create" and v2_preset_conflicts(current, agent_id=request.agent_id):
+                raise DeepSeekHarnessV2Error("DSH Web Profile already registers this preset ID")
+            if request.mode == "update":
+                registered = extract_v2_preset(current, agent_id=request.agent_id)
+                if registered is not None:
+                    previous = extract_v2_preset(
+                        _stable_bytes(target_root / "preset.patch.yml").decode("utf-8"),
+                        agent_id=request.agent_id,
+                    )
+                    if previous != registered:
+                        raise DeepSeekHarnessV2Error("DSH Web Preset differs from its managed copy")
+            self._check_v2_bundle_conflicts(request, facts)
+            merged = merge_v2_preset(
+                current,
+                preset.decode("utf-8"),
+                agent_id=request.agent_id,
+            ).encode("utf-8")
+        except (UnicodeDecodeError, DeepSeekHarnessV2Error) as exc:
+            raise DeepSeekHarnessAdapterError(str(exc)) from exc
+
+        def intent(target: Path, content: bytes, relative: str, kind: str) -> WriteIntent:
+            exists = target.is_file()
+            return WriteIntent(
+                target=str(target),
+                action="update" if exists else "create",
+                content_sha256=_sha256(content),
+                size=len(content),
+                description=f"DeepSeek 0.2 {kind}",
+                expected_before_sha256=_sha256(target.read_bytes()) if exists else None,
+                parameters={
+                    "kind": "file",
+                    "payload_kind": kind,
+                    "staging_relative": f"host-files/{relative}",
+                },
+            )
+
+        intents = [intent(target_root / "preset.patch.yml", preset, "preset.patch.yml", "v2-preset")]
+        for snapshot in snapshots:
+            for record in snapshot.files:
+                relative = f"skills/{snapshot.selection.name}/{record.relative_path}"
+                target = target_root.joinpath(*relative.split("/"))
+                exists = target.is_file()
+                intents.append(
+                    WriteIntent(
+                        target=str(target),
+                        action="update" if exists else "create",
+                        content_sha256=record.sha256,
+                        size=record.size,
+                        description=f"fixed Skill snapshot {snapshot.selection.name}",
+                        expected_before_sha256=_sha256(target.read_bytes()) if exists else None,
+                        parameters={
+                            "kind": "file",
+                            "payload_kind": "skill",
+                            "staging_relative": f"host-files/{relative}",
+                        },
+                    )
+                )
+        intents.append(intent(target_root / MANAGED_MARKER, _marker_bytes(request, persona), MANAGED_MARKER, "marker"))
+        intents.append(
+            WriteIntent(
+                target=str(profile_patch),
+                action="update",
+                content_sha256=_sha256(merged),
+                size=len(merged),
+                description="register one managed DSH 0.2 agent preset",
+                expected_before_sha256=_sha256(original),
+                parameters={
+                    "kind": "file",
+                    "payload_kind": "v2-profile-patch",
+                    "staging_relative": "host-files/profile-cordis.patch.yml",
+                },
+            )
+        )
+        return tuple(intents)
+
+    def _check_v2_bundle_conflicts(self, request: DeploymentRequest, facts: HostFacts) -> None:
+        home = Path(cast(str, facts.facts["dsh_home"]))
+        profile_manifest = Path(cast(str, facts.facts["web_profile_package"]))
+        standard = Path(cast(str, facts.facts["standard_patch"]))
+        install_modules = (home / "profiles/node_modules/@deepseek-ai/dsh").resolve().parent.parent
+        module_roots = (install_modules, profile_manifest.parent / "node_modules", standard.parents[2].parent)
+        profile = read_json_object(profile_manifest)
+        dsh = cast(Mapping, profile["dsh"])
+        bundles = cast(Mapping, dsh["profile"])["bundles"]
+        paths = [home / "cordis.patch.yml"]
+        for bundle in bundles:
+            if not re.fullmatch(r"(?:@[a-zA-Z0-9_-][\w.-]*/)?[a-zA-Z0-9_-][\w.-]*", bundle):
+                raise DeepSeekHarnessV2Error("invalid DSH bundle package name")
+            for root in module_roots:
+                package = root / bundle / "package.json"
+                if package.is_file():
+                    break
+            else:
+                raise DeepSeekHarnessV2Error(f"cannot inspect DSH Web bundle {bundle}")
+            metadata = read_json_object(package).get("dsh")
+            bundle_info = metadata.get("bundle") if isinstance(metadata, Mapping) else None
+            patches = bundle_info.get("patch", "./cordis.patch.yml") if isinstance(bundle_info, Mapping) else ()
+            files = (patches,) if isinstance(patches, str) else patches
+            package_root = package.parent.resolve()
+            for name in files:
+                path = (package_root / name).resolve()
+                if not path.is_relative_to(package_root) or not path.is_file():
+                    raise DeepSeekHarnessV2Error(f"cannot inspect DSH Web bundle patch for {bundle}")
+                paths.append(path)
+        for path in paths:
+            if path.is_file() and v2_preset_conflicts(
+                _stable_bytes(path).decode("utf-8"), agent_id=request.agent_id
+            ):
+                raise DeepSeekHarnessV2Error("DSH Web bundle or home patch already registers this preset ID")
+
     def plan_writes(
         self,
         request: DeploymentRequest,
@@ -571,6 +919,8 @@ class DeepSeekHarnessAdapter:
         }
         if request.mode == "update":
             validate_managed_target(target_root, mode="update", expected_marker=marker_identity)
+        if facts.facts.get("generation") == "profile-v2":
+            return self._plan_v2_writes(request, snapshots, persona, facts)
         source = _agent_source(request, facts)
         agent_text = patch_standard_agent_template(
             source,
@@ -581,7 +931,7 @@ class DeepSeekHarnessAdapter:
         )
         agent_text = _patch_mcp_servers(agent_text, _mcp_servers(request, deployed=True))
         preset_text = _render_preset(request)
-        marker = _marker_bytes(request)
+        marker = _marker_bytes(request, persona)
 
         def intent(target: Path, content: bytes, relative: str, kind: str) -> WriteIntent:
             exists = target.is_file()
@@ -630,6 +980,26 @@ class DeepSeekHarnessAdapter:
     def _generated_content(self, intent: WriteIntent, context: ApplyContext) -> bytes:
         request = context.plan.request
         kind = intent.parameters.get("payload_kind")
+        if kind == "v2-preset":
+            return self._v2_preset_patch(
+                request,
+                context.plan.persona,
+                context.plan.host_facts,
+            ).encode("utf-8")
+        if kind == "v2-profile-patch":
+            profile_patch = Path(intent.target)
+            try:
+                return merge_v2_preset(
+                    _stable_bytes(profile_patch).decode("utf-8"),
+                    self._v2_preset_patch(
+                        request,
+                        context.plan.persona,
+                        context.plan.host_facts,
+                    ),
+                    agent_id=request.agent_id,
+                ).encode("utf-8")
+            except (UnicodeDecodeError, DeepSeekHarnessV2Error) as exc:
+                raise DeepSeekHarnessAdapterError(str(exc)) from exc
         if kind == "agent-template":
             source = _agent_source(request, context.plan.host_facts)
             patched = patch_standard_agent_template(
@@ -645,7 +1015,7 @@ class DeepSeekHarnessAdapter:
         if kind == "preset":
             return _render_preset(request).encode("utf-8")
         if kind == "marker":
-            return _marker_bytes(request)
+            return _marker_bytes(request, context.plan.persona)
         relative = cast(str, intent.parameters["staging_relative"])
         return context.staging_root.joinpath(*relative.split("/")).read_bytes()
 
@@ -667,7 +1037,20 @@ class DeepSeekHarnessAdapter:
                 )
             )
         try:
-            result = apply_managed_transaction(tuple(writes), backup_root=context.backup_root)
+            if context.plan.host_facts.facts.get("generation") == "profile-v2":
+                patch = Path(cast(str, context.plan.host_facts.facts["profile_patch"]))
+                lock = patch.with_name(".awh-preset-apply.lock")
+                try:
+                    descriptor = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+                except FileExistsError:
+                    raise DeepSeekHarnessAdapterError("another DSH Preset apply holds the Web Profile lock") from None
+                try:
+                    result = apply_managed_transaction(tuple(writes), backup_root=context.backup_root)
+                finally:
+                    os.close(descriptor)
+                    lock.unlink()
+            else:
+                result = apply_managed_transaction(tuple(writes), backup_root=context.backup_root)
         except TransactionApplyError as exc:
             raise DeepSeekHarnessAdapterError(str(exc)) from exc
         return HostApplyResult(
@@ -679,6 +1062,7 @@ class DeepSeekHarnessAdapter:
     def verify(self, context: VerifyContext) -> VerificationResult:
         manifest = context.manifest
         target_root = Path(manifest.host_facts.target_root or "")
+        generation = manifest.host_facts.facts.get("generation")
         static_ok = True
         try:
             marker = read_json_object(target_root / MANAGED_MARKER)
@@ -699,15 +1083,35 @@ class DeepSeekHarnessAdapter:
                     reason="verify DSH deployed snapshot",
                 )
                 static_ok = static_ok and snapshot_skill(target_root, selection).tree_sha256 == expected
-            static_ok = static_ok and (target_root / "agent.cordis.yml").is_file() and (target_root / "preset.yml").is_file()
             servers = _mcp_servers(manifest.request, deployed=True)
-            if servers:
+            if generation == "profile-v2":
+                preset_path = target_root / "preset.patch.yml"
+                profile_patch = Path(cast(str, manifest.host_facts.facts["profile_patch"]))
+                expected = extract_v2_preset(
+                    _stable_bytes(preset_path).decode("utf-8"),
+                    agent_id=manifest.agent_id,
+                )
+                actual = extract_v2_preset(
+                    _stable_bytes(profile_patch).decode("utf-8"),
+                    agent_id=manifest.agent_id,
+                )
+                static_ok = static_ok and expected is not None and actual == expected
+            else:
+                static_ok = static_ok and (target_root / "agent.cordis.yml").is_file() and (target_root / "preset.yml").is_file()
+            if servers and generation != "profile-v2":
                 rows = _agent_rows(_stable_bytes(target_root / "agent.cordis.yml").decode("utf-8"))
                 for server in servers:
                     expected = _agent_rows(_mcp_row(server))[0]
                     actual = [row for row in rows if row.get("id") == expected["id"]]
                     static_ok = static_ok and actual == [expected]
-        except (ValueError, OSError, SourceSnapshotError, DeepSeekHarnessAdapterError):
+        except (
+            ValueError,
+            OSError,
+            UnicodeDecodeError,
+            SourceSnapshotError,
+            DeepSeekHarnessAdapterError,
+            DeepSeekHarnessV2Error,
+        ):
             static_ok = False
         if not static_ok:
             return VerificationResult(

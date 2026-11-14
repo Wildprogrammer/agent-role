@@ -136,6 +136,17 @@ def _content_sha256(content: bytes) -> str:
     return hashlib.sha256(content).hexdigest()
 
 
+def _check_expected_source(item: ManagedWrite) -> bytes | None:
+    if item.expected_before_sha256 is None:
+        if item.target.exists() or item.target.is_symlink():
+            raise ManagedTargetError(f"create write target already exists: {item.target}")
+        return None
+    original = _stable_bytes(item.target)
+    if _content_sha256(original) != item.expected_before_sha256:
+        raise ManagedTargetError(f"update source digest changed: {item.target}")
+    return original
+
+
 def validate_managed_target(
     target: Path,
     *,
@@ -272,15 +283,8 @@ def apply_managed_transaction(
     originals: dict[Path, bytes] = {}
     for item in writes:
         _validate_path(item.target, "write target")
-        if item.expected_before_sha256 is None:
-            if item.target.exists() or item.target.is_symlink():
-                raise ManagedTargetError(f"create write target already exists: {item.target}")
-        else:
-            if not item.target.is_file():
-                raise ManagedTargetError(f"update write target does not exist: {item.target}")
-            original = _stable_bytes(item.target)
-            if _content_sha256(original) != item.expected_before_sha256:
-                raise ManagedTargetError(f"update source digest changed: {item.target}")
+        original = _check_expected_source(item)
+        if original is not None:
             originals[item.target] = original
 
     if originals:
@@ -293,6 +297,7 @@ def apply_managed_transaction(
     try:
         for item in writes:
             intended = _content_sha256(item.content)
+            _check_expected_source(item)
             try:
                 _atomic_replace(item.target, item.content)
             except Exception as write_error:
@@ -324,6 +329,9 @@ def apply_managed_transaction(
                     backup = _backup_path(backup_root, item.target)
                     original = _stable_bytes(backup)
                     if _content_sha256(original) != item.expected_before_sha256:
+                        unknown.append(item.target)
+                        continue
+                    if reconcile_uncertain_write(item.target, intended) != "applied":
                         unknown.append(item.target)
                         continue
                     try:

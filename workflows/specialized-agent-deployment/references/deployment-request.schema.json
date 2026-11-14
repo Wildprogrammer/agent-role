@@ -185,7 +185,6 @@
             "additionalProperties": false,
             "required": [
               "dsh_home",
-              "runtime_root",
               "profile"
             ],
             "properties": {
@@ -205,6 +204,9 @@
                 "items": {
                   "$ref": "#/$defs/dshMcpServer"
                 }
+              },
+              "schedule": {
+                "$ref": "#/$defs/dshSchedule"
               }
             }
           }
@@ -294,6 +296,14 @@
           "minLength": 1,
           "description": "服务的既有工作目录绝对路径。"
         }
+      }
+    },
+    "dshSchedule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled"],
+      "properties": {
+        "enabled": {"type": "boolean"}
       }
     },
     "kebab": {
