@@ -1,6 +1,6 @@
 ---
 name: mobile-device-automation
-description: Use when an Agent must explore and automate an Android physical device or emulator with agent-device, then generate a verified mixed replay with conditional Airtest image matching.
+description: Use when an Agent must explore and automate an Android physical device or emulator with agent-device, optionally use the ESP32 Android MCP for HID input, then generate a verified mixed replay with conditional Airtest image matching.
 compatibility: Agent Workflow Hub spec 1.0; Android via agent-device 0.21.19 and optional Airtest 1.4.3 image replay; iOS reserved but unsupported in v1.
 metadata:
   spec-version: "1.0"
@@ -85,6 +85,12 @@ Helper 缺失、版本不符或无法验证时，普通文本输入可静默采�
 安装或更新 agent-device/Airtest 只能写入能力契约声明的 Hub runtime。工作流不修改防火墙、系统服务、Android SDK、驱动、MCP 配置、设备开发者选项或账号设置。设备端出现系统授权弹窗时，应由用户明确处理，不能规避系统授权。
 
 破坏性动作必须先 `preview`，再获得与本次 `plan_sha256` 完全一致的明确授权，并通过 `--confirmed-plan-sha256` 传入 replay。计划、目标、参数、副作用、模板、断言或资产变化都会使旧授权失效。普通安装应用、发送消息、支付、发布等虽然不一定属于 delete，仍只能来自用户明确任务范围并受宿主与上游安全策略约束。
+
+## 可选的 ESP32 HID 输入
+
+用户选择 ESP32 HID 时，加载独立的 [ESP32 Android 输入工作流](../esp32-android-input/SKILL.md)，调用宿主注册的 `android_agent` MCP。每次动作前先用 `android_status` 确认手机在线、工作台可接管、`mode` 与所选通道一致，且 `hid_ready: true`。随后获取新截图、执行一次 `android_action`，再用新截图验证实际页面变化。模式变化或设备重连后先恢复工作台绑定。HID 不可用时停止该路径，用户可显式选择其他执行器。
+
+这一路径用于动态探索。`.ad` 和 Airtest 固化回放沿用各自的执行器。坐标探测、英文输入和真机验收见 [MCP 接入](../esp32-android-input/references/mcp-integration.md#真机验收与恢复)。
 
 ## 执行步骤
 

@@ -61,6 +61,7 @@ agent-role 的 README、工作流说明和相关网页
 | `daily-assistant` | 整理每日任务和进度，给出优先级建议并生成本地工作记录。 | 日程管理、工作汇报 |
 | `desktop-client-automation` | 使用 Cua Driver 或宿主原生 Computer Use 探索 Windows、macOS 桌面客户端及显式系统桌面；可按新鲜桌面截图动态点击主显示器图标，并把确认后的 Windows 操作路径固化为 Airtest 回放；支持通过共享组合语义复用精确版本的 Windows 应用组件，同时保持桌面图片和应用绑定独立。 | 桌面客户端操作、桌面图标操作、跨平台探索、Windows 自动化回放、组件复用 |
 | `mobile-device-automation` | 使用 agent-device 操作 Android 真机或模拟器，优先按控件语义定位；控件树不足时可用 Airtest 对设备新鲜截图做唯一图片匹配；支持通过共享组合语义复用精确版本的应用组件，同时保持 Android 选择器、脚本、图片和设备证据独立。 | 手机应用操作、Android 自动化测试、应用内公共步骤复用、组件组合 |
+| `esp32-android-input` | 通过本地 MCP 获取 Android 截图，并用已选的 ESP32 BLE HID 或 S3 USB HID 点击、滑动和输入。 | Android 真机交互，可独立调用或配合手机自动化工作流 |
 | `git-operations` | 查看和操作 Git 仓库，包括提交快照读取、分支、提交、合并和推送。 | 代码开发、持续集成、发布流程 |
 | `image-ocr` | 使用本地 OCR 从图片中提取按阅读顺序排列的文本。 | 文档采集、资料数字化 |
 | `information-collection` | 采集、筛选和总结指定网页资料，并按需生成交付文件。 | 调研、知识库建设、需求分析 |
