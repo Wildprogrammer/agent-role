@@ -79,6 +79,18 @@ Hermes 0.22+ 使用原生 gateway 与一次性连接 ticket，并显式查询 st
 For DSH upgrades and supported session operations, see
 [DeepSeek Harness Web compatibility](references/deepseek-harness-compatibility.md).
 
+## Connect the companion and phone
+
+The PC companion follows the ESP32 binding. The independent phone page can
+select any available agent and an existing session. To share history, first
+create a session under the desired profile in Hermes or DeepSeek Harness.
+Select that same session for the ESP32 in the admin console and in the phone's
+agent and session picker. See the [phone setup](references/mobile-client.md).
+
+Both pages share captions, activity indicators, and fallback expressions.
+The [optional pet animation setup](references/companion-pet.md) includes the
+pinned asset installer and upstream attribution.
+
 ## Compatibility names
 
 The public workflow ID is `agent-session-gateway`. Some internal Python modules,

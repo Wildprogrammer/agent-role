@@ -76,6 +76,51 @@ def setup(root, adapter=None, transcribe=None, synthesize=None):
     return app, phone, adapter
 
 
+def test_mobile_pet_exact_resources_and_video_range(tmp_path, monkeypatch):
+    from shutil import copytree
+
+    from agent_workflow_hub.xiaozhi_hermes_bridge import mobile_channel
+
+    static = copytree(
+        mobile_channel.STATIC, tmp_path / "static",
+        ignore=lambda _, names: {n for n in names if n.endswith(".webm") or n == "lingxi-pet-assets.json"},
+    )
+    monkeypatch.setattr(mobile_channel, "STATIC", static)
+    clip_name = "lingxi-pet-idle.webm"
+    clip = b"optional-video-fixture" * 3
+
+    async def run():
+        channel, _, adapter = setup(tmp_path)
+        server = TestServer(channel.app)
+        await server.start_server()
+        channel.origins = {str(server.make_url("")).rstrip("/")}
+        async with TestClient(server) as client:
+            page = await (await client.get("/")).text()
+            assert page.index('/static/pet.js') < page.index('/static/mobile.js')
+            for name in mobile_channel.MOBILE_STATIC_FILES:
+                response = await client.get('/static/' + name)
+                if not (static / name).is_file():
+                    assert response.status == 404, name
+                    continue
+                assert response.status == 200, name
+                assert await response.read() == (static / name).read_bytes()
+                assert response.headers['X-Content-Type-Options'] == 'nosniff'
+            (static / clip_name).write_bytes(clip)
+            response = await client.get('/static/lingxi-pet-idle.webm?v=0.4.7', headers={'Range': 'bytes=0-31'})
+            assert response.status == 206
+            assert response.content_type == 'video/webm'
+            assert response.headers['Cache-Control'] == 'private, max-age=86400'
+            assert await response.read() == clip[:32]
+            for resource in ('/', '/static/pet.js?v=2', '/static/lingxi-pet-idle.webm'):
+                async with client.get(resource) as response:
+                    assert response.headers['Cache-Control'] == 'no-store'
+            for name in ('admin.js', 'index-admin.html', 'companion.js', 'mobile_channel.py', 'lingxi-pet-unknown.webm'):
+                assert (await client.get('/static/' + name)).status == 404
+            assert (await client.get('/api/session')).status == 401
+            assert not adapter.sent and not adapter.cancelled
+    asyncio.run(run())
+
+
 @pytest.mark.parametrize("disconnect", [False, True])
 def test_photo_route_slow_network_limits_and_disconnect_cleanup(tmp_path, disconnect):
     from types import SimpleNamespace

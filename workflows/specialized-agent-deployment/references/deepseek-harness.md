@@ -20,6 +20,8 @@
 
 Web 行为验证需要用户选择该 Preset 后执行固定无工具提示，并提供 session id、preset id、prompt SHA、response SHA 和解析结果。证据缺失时状态必须保持 `partially_verified`。
 
+在 `0.2.2-rc.1` 中，Persona 应使用内置工作目录上下文。部署规划会拒绝废弃的 `{{cwd}}` 变量。热加载能更新 Preset 注册表，已挂载的会话仍可能使用旧配置。修复后请在原会话验证下一轮。如需冷加载，待活跃回合结束后按受管流程重启宿主。
+
 ## Agent 间持续协作
 
 旧版中，为一个测试 Agent 绑定固定业务解答 Agent 时，在目标 Preset 用 `@deepseek-ai/dsh-tool-subagent` 注册独立命名的 `ask_business_agent`，设置 `provider: spawn`、`backgroundMode: continuable`、固定业务 Persona、递归深度和工具过滤。业务 Persona 使用已部署业务 Agent 的 Skill 与运行副本。升级到 0.2.2 时，按上文迁移旧版委派配置。

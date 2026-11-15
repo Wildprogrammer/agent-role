@@ -1,0 +1,26 @@
+body.pet-preview { overflow: auto; }
+.preview-heading { padding: 2.5rem 5vw 0; }
+.preview-heading p:first-child { letter-spacing: .22em; font-size: .7rem; color: #8bdbe4; }
+.preview-heading h1 { margin-block: .7rem; font-size: clamp(1.5rem, 2.5vw, 2.5rem); font-weight: 500; }
+.preview-heading p:last-child { color: #8799bb; font-size: .8rem; }
+.preview-layout { display: grid; grid-template-columns: 1.2fr 1fr; gap: 3vw; width: min(1260px, 92vw); margin: 1.5rem auto; align-items: center; }
+.preview-scene { display: grid; justify-items: center; text-align: center; border: 1px solid #b6c9ff14; border-radius: 30px; background: radial-gradient(ellipse at 50% 45%, #93b8ff0c, transparent 70%); padding-bottom: 1.5rem; }
+.preview-scene .face-wrap.pet-stage { grid-area: auto; width: min(44vw, 54svh, 520px); }
+.preview-caption { margin-top: .5rem; font-size: clamp(1.1rem, 1.6vw, 1.4rem); letter-spacing: .04em; }
+.preview-scene > .muted { font-size: .78rem; margin-top: .8rem; }
+.preview-kicker { color: #8bdbe4; letter-spacing: .15em; font-size: .75rem; }
+.preview-options h2 { font-size: 1.7rem; margin: .7rem 0 1.4rem; font-weight: 500; }
+.preview-states { display: grid; grid-template-columns: repeat(3, 1fr); gap: .65rem; }
+.preview-states button { text-align: left; border-color: #9eb8ef20; padding: .9rem; background: #1a294542; }
+.preview-states button[aria-pressed="true"] { background: #93b8ff22; border-color: #a5c4ff; }
+.preview-states button small { display: block; font-size: .68rem; color: #8fa5c5; margin-top: .35rem; }
+.preview-options > .muted { font-size: .8rem; line-height: 1.9; margin: 1.2rem 0; }
+.preview-return, .preview-credit a { color: #a7bee9; text-underline-offset: 5px; }
+.preview-credit { padding: 1rem 5vw 2rem; font-size: .7rem; }
+@media (max-width: 700px) {
+  .preview-heading { padding-top: 1.5rem; }
+  .preview-layout { grid-template-columns: 1fr; gap: 1.8rem; }
+  .preview-scene .face-wrap.pet-stage { width: min(90vw, 39svh); }
+  .preview-options h2 { font-size: 1.3rem; }
+  .preview-states button { padding: .75rem; }
+}

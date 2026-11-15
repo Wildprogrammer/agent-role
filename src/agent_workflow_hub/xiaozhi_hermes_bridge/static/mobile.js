@@ -9,9 +9,23 @@
   let uploadXhr = null, preparingPhoto = false;
   let reconnectAllowed = false, reconnecting = false, reconnectAttempt = 0;
   let reconnectTimer, socketTimer, bindingVerified = false;
+  const screen = window.LingxiPet.mountScreen({
+    face: $('face'), microphone: $('mic-indicator'),
+    dialogue: $('live-dialogue'), status: $('state'),
+  });
+  let visualState = 'offline', visualLabel = '连接已断开';
+  document.body.classList.add('mobile-pet-on'); $('pet-credit').hidden = false;
   const states = {idle:'准备好了', listening:'正在听你说 · 再点一次发送', transcribing:'正在识别语音', thinking:'正在思考', synthesizing:'正在准备声音', speaking:'正在回答', offline:'连接已断开', error:'需要处理'};
   function notice(text) { $('notice').textContent = text; }
-  function state(name, label) { $('state').textContent = label || states[name] || name; $('face').dataset.state = name; }
+  function renderPet() {
+    const activeAudio = !!source && !muted && !document.hidden;
+    const mapped = {idle: busy || preparingPhoto || stopping ? 'updating' : bindingReady() ? 'neutral' : 'question',
+      transcribing:'thinking', synthesizing:'updating', speaking:activeAudio ? 'speaking' : 'question'};
+    screen.setState(mapped[visualState] || visualState, visualLabel, {
+      capturing: recording, playing: activeAudio, suspended: !reconnectAllowed || !$('login').hidden,
+    });
+  }
+  function state(name, label) { visualState = name; visualLabel = label || states[name] || name; renderPet(); }
   function controls() {
     const connected = ws?.readyState === 1;
     const ready = bindingReady();
@@ -21,7 +35,7 @@
     $('bind').disabled = busy || bindingPending || !connected || !$('sessions').value; $('camera').disabled = busy || !ready;
     $('agents').disabled = $('sessions').disabled = $('refresh').disabled = busy || bindingPending;
     $('mic').disabled = !connected || !ready || stopping || (busy && !recording); $('mic').textContent = recording ? '结束并发送' : '点击说话';
-    $('mic-indicator').hidden = !recording;
+    renderPet();
   }
   function bindingReady() {
     return bindingVerified && !bindingPending && binding?.bound === true && $('agents').value === JSON.stringify([binding.host,binding.profile]) && $('sessions').value === binding.stored_session_id;
@@ -45,7 +59,7 @@
     if (!audioContext) { audioContext = new AudioContext(); gain = audioContext.createGain(); gain.gain.value = Number($('volume').value); gain.connect(audioContext.destination); }
     await audioContext.resume();
   }
-  function stopAudio() { if (source) { source.onended = null; try { source.stop(); } catch {} source.disconnect(); source = null; } audioMeta = null; }
+  function stopAudio() { if (source) { source.onended = null; try { source.stop(); } catch {} source.disconnect(); source = null; } audioMeta = null; renderPet(); }
   function showAudioPreference() {
     $('mute').textContent = muted ? '仅文字 · 点击恢复语音' : '静音 / 仅文字';
     $('mute').setAttribute('aria-pressed', String(muted));
@@ -155,7 +169,7 @@
       const attachments = await attachPhoto(currentEpoch);
       if (currentEpoch !== epoch) return;
       turn = uid(); capturePending = capture;
-      $('question').textContent = capture ? '' : text; $('answer').textContent = ''; notice('');
+      screen.clearCaptions(); screen.caption('question', capture ? '' : text, {animate: false}); notice('');
       send({type:capture ? 'capture' : 'submit', turn, text, attachments});
       removePhoto(); $('text').value = '';
       state(capture ? 'listening' : 'thinking');
@@ -193,7 +207,7 @@
       const decoded = await audioContext.decodeAudioData(bytes.slice(32));
       if (currentEpoch !== epoch || currentAudioEpoch !== audioEpoch || audioTurn !== turn || document.hidden || muted) return;
       source = audioContext.createBufferSource(); source.buffer = decoded; source.connect(gain);
-      source.onended = () => { source = null; if (audioTurn === turn) send({type:'played', turn:audioTurn, sequence}); };
+      source.onended = () => { source = null; renderPet(); if (audioTurn === turn) send({type:'played', turn:audioTurn, sequence}); };
       source.start(); state('speaking');
     } catch { stop(); notice('手机音频未能播放，文字已保留。请点击后再试。'); }
   }
@@ -247,6 +261,7 @@
       if (!reconnectAllowed) return;
       if (error.status === 401) {
         reconnectAllowed = false; $('login').hidden = false;
+        renderPet();
         $('login-error').textContent = '登录已过期，请重新连接。照片和问题仍保留。';
       } else notice('正在等待网络恢复，照片和问题仍保留。');
     } finally {
@@ -256,6 +271,7 @@
   }
   function connect() {
     if (!reconnectAllowed || (ws && ws.readyState < 2)) return;
+    renderPet();
     const socket = new WebSocket(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/api/socket`);
     ws = socket; socket.binaryType = 'arraybuffer'; bindingVerified = false; watchSocket(socket);
     socket.onopen = () => { if (socket !== ws) return; busy = stopping = bindingPending = false; bindingHint(); send({type:'binding'}); send({type:'agents'}); };
@@ -270,8 +286,8 @@
         case 'audio_preference': if (muted !== !msg.enabled) audioEpoch++; muted = !msg.enabled; if (muted) stopAudio(); showAudioPreference(); notice(muted ? '仅文字模式：保留字幕，不生成语音；智能体继续回答。' : '语音已开启，已跳过的声音不会补播。'); break;
         case 'capture_ready': startMic(); break;
         case 'state': state(msg.state); break;
-        case 'question': $('question').textContent = msg.text; break;
-        case 'answer': $('answer').textContent = msg.text; break;
+        case 'question': screen.caption('question', msg.text); break;
+        case 'answer': screen.caption('answer', msg.text); break;
         case 'audio': audioMeta = msg; break;
         case 'notice': notice(msg.message); break;
         case 'error': bindingPending = false; if (busy && !stopping) stop(); else { localStop(); busy = false; bindingHint(); } notice(msg.message); break;
@@ -343,6 +359,6 @@
   });
   window.addEventListener('online', () => { reconnectAttempt = 0; void recoverConnection(); });
   window.addEventListener('pagehide', () => { reconnectAllowed = false; clearTimeout(reconnectTimer); reconnectTimer = null; clearTimeout(socketTimer); socketTimer = null; localStop(); ws?.close(); });
-  window.addEventListener('pageshow', () => { if (csrf) { reconnectAllowed = true; void recoverConnection(); } });
+  window.addEventListener('pageshow', () => { if (csrf) { reconnectAllowed = true; renderPet(); void recoverConnection(); } });
   api('/api/session').then(result => { csrf = result.csrf; reconnectAllowed = true; $('login').hidden = true; $('app').hidden = false; connect(); }).catch(() => {});
 })();

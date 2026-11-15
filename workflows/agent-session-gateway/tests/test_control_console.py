@@ -837,7 +837,11 @@ def test_http_surfaces_enforce_auth_csrf_origin_host_and_fixed_scope(tmp_path: P
     while companion_port == admin_port:
         companion_port = _free_port()
     coordinator = FakeControlCoordinator()
-    static_root = Path(__file__).parents[3] / "src" / "agent_workflow_hub" / "xiaozhi_hermes_bridge" / "static"
+    from shutil import copytree
+
+    shipped = Path(__file__).parents[3] / "src" / "agent_workflow_hub" / "xiaozhi_hermes_bridge" / "static"
+    static_root = copytree(shipped, tmp_path / "static", ignore=lambda _, names: {n for n in names if n.endswith(".webm")})
+    (static_root / "lingxi-pet-idle.webm").write_bytes(b"optional-video-fixture")
     servers = ControlHttpServers(
         coordinator,  # type: ignore[arg-type]
         admin_port=admin_port,
@@ -852,6 +856,14 @@ def test_http_surfaces_enforce_auth_csrf_origin_host_and_fixed_scope(tmp_path: P
         assert status == 401
         assert headers["X-Frame-Options"] == "DENY"
         assert "frame-ancestors 'none'" in headers["Content-Security-Policy"]
+
+        clip = "/static/lingxi-pet-idle.webm"
+        status, headers, _ = _request(companion_port, "GET", clip + "?v=0.4.7")
+        assert status == 200
+        assert headers["Cache-Control"] == "private, max-age=86400"
+        assert headers["Content-Type"] == "video/webm"
+        for path in ("/", clip, "/static/pet.js?v=2"):
+            assert _request(companion_port, "GET", path)[1]["Cache-Control"] == "no-store"
 
         status, _, _ = _request(
             admin_port,
@@ -1202,13 +1214,17 @@ def test_companion_status_tracks_online_state_and_hides_after_inactivity() -> No
     assert ".companion.ui-hidden .companion-ui" in css
     assert 'id="mic-indicator"' in html
     assert 'id="live-dialogue"' in html
-    assert 'id="question-text"' in html
-    assert 'id="answer-text"' in html
+    shared = (static_root / "pet.js").read_text(encoding="utf-8")
+    shared_css = (static_root / "pet.css").read_text(encoding="utf-8")
+    mobile = (static_root / "index-mobile.html").read_text(encoding="utf-8")
+    assert all("/static/pet.js?v=2" in entry and "/static/pet.css?v=2" in entry for entry in (html, mobile))
+    assert "mountScreen" in javascript and "mountScreen" in shared
+    assert "caption(kind, value" in shared
     assert 'lingxi.request("/api/live/subscribe"' in javascript
     assert "const LIVE_POLL_MS = 500" in javascript
-    assert "requestAnimationFrame" in javascript
-    assert "Intl.Segmenter" in javascript
-    assert "scrollDialogueToLatest" in javascript
+    assert "requestAnimationFrame" in shared
+    assert "Intl.Segmenter" in shared
+    assert "scrollDialogueToLatest" in shared
     assert "viewGeneration" in javascript
     assert "livePollInFlight" in javascript
     assert "liveSyncPromise" in javascript
@@ -1218,34 +1234,30 @@ def test_companion_status_tracks_online_state_and_hides_after_inactivity() -> No
     assert "nextTurn !== liveState.turnId && hasDialogue" in javascript
     assert "nextTurn === liveState.turnId && revision >= liveState.revision" in javascript
     assert "resume_token" in javascript
-    assert 'id="answer-gap"' in html
-    assert 'id="answer-tail"' in html
     assert "async function setPrivacy" in javascript
     assert "await unsubscribeLive()" in javascript
     assert 'data-mood="none"' in html
     assert "scheduleMood(12000)" in javascript
-    assert ".mic-wave i" in css
-    assert '.face-wrap[data-mood="wink"]' in css
-    assert '.face-wrap[data-mood="cheeky"]' in css
+    assert ".mic-wave i" in shared_css
+    assert '.face-wrap[data-mood="wink"]' in shared_css
+    assert '.face-wrap[data-mood="cheeky"]' in shared_css
     assert 'class="companion-page"' in html
-    assert 'class="eye left"></span>' in html
-    assert 'class="eye right"></span>' in html
     assert 'class="arm left"' not in html
     assert 'class="orbit orbit-a"' not in html
-    assert ".arm, .orbit, .pupil, .brow, .cheek, .nose, .sparkle { display: none; }" in css
-    assert "border: 0;" in css
-    assert "--robot-eye: #78ffc4" in css
-    assert "--robot-screen: #020608" in css
-    assert '.face-wrap[data-state="happy"] .eye' in css
-    assert '.face-wrap[data-state="error"] .eye' in css
-    assert "@keyframes robot-blink" in css
-    assert "@keyframes robot-listen" in css
+    assert ".arm, .orbit, .pupil, .brow, .cheek, .nose, .sparkle { display: none; }" in shared_css
+    assert "border: 0;" in shared_css
+    assert "--robot-eye: #78ffc4" in shared_css
+    assert "--robot-screen: #020608" in shared_css
+    assert '.face-wrap[data-state="happy"] .eye' in shared_css
+    assert '.face-wrap[data-state="error"] .eye' in shared_css
+    assert "@keyframes robot-blink" in shared_css
+    assert "@keyframes robot-listen" in shared_css
     assert "@keyframes robot-ear-left" not in css
-    assert 'style.css?v=8' in html
+    assert 'style.css?v=9' in html
     assert "@media (orientation: portrait)" in css
     assert "@media (orientation: landscape) and (min-width: 900px)" in css
     assert "env(safe-area-inset-top)" in css
-    assert "max-height: min(34svh, 360px)" in css
+    assert "max-height: min(34svh, 360px)" in shared_css
     assert 'id="butterfly-stage"' in html
     assert "function releaseButterfly" in javascript
     assert 'document.createElement("span")' in javascript
@@ -1261,9 +1273,11 @@ def test_companion_keeps_completed_dialogue_until_new_turn_has_text() -> None:
         pytest.skip("Node.js is required for the companion browser-state regression")
     static_root = Path(__file__).parents[3] / "src" / "agent_workflow_hub" / "xiaozhi_hermes_bridge" / "static"
     javascript = (static_root / "companion.js").read_text(encoding="utf-8")
+    shared = (static_root / "pet.js").read_text(encoding="utf-8")
     harness = r'''
 const fs = require("fs");
-let source = fs.readFileSync(0, "utf8");
+const [sharedSource, sourceText] = JSON.parse(fs.readFileSync(0, "utf8"));
+let source = sourceText;
 const marker = "  lingxi.session()";
 if (!source.includes(marker)) throw new Error("companion test export marker is missing");
 source = source.replace(marker, "  globalThis.__companionTest = { applyProjection, liveState, render, startPolling };\n" + marker);
@@ -1283,7 +1297,9 @@ function element(id) {
       dataset: { mood: "none" },
       style: { setProperty() {} },
       classList: { add() {}, remove() {}, toggle() {} },
-      addEventListener() {}, focus() {}, append() {}, remove() {},
+      addEventListener() {}, focus() {},
+      append(...nodes) { for (const node of nodes) if (node.id) elements.set(node.id, node); },
+      pause() {}, load() {}, remove() {}, setAttribute() {},
       scrollHeight: 0, scrollTop: 0, childElementCount: 0, firstElementChild: null,
     });
   }
@@ -1291,7 +1307,8 @@ function element(id) {
 }
 global.document = {
   getElementById: element,
-  createElement: (tag) => element(`created-${tag}-${elements.size}`),
+  createElement: () => { const node = element(`created-${elements.size}`); delete node.id; return node; },
+  addEventListener() {},
   body: element("body"),
   documentElement: { requestFullscreen() {} },
   fullscreenElement: null,
@@ -1318,6 +1335,7 @@ global.lingxi = {
   request(path, options) { return requestImpl(path, options); },
   login() { return Promise.resolve({}); },
 };
+eval(sharedSource);
 eval(source);
 const api = globalThis.__companionTest;
 const projection = (turn_id, revision, question, answer, capture_active = false, speech_active = false) => ({
@@ -1399,7 +1417,7 @@ const projection = (turn_id, revision, question, answer, capture_active = false,
 '''
     completed = subprocess.run(
         [node, "-e", harness],
-        input=javascript,
+        input=json.dumps([shared, javascript]),
         text=True,
         capture_output=True,
         check=False,

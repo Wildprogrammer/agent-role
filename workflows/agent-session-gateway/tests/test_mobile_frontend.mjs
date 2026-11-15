@@ -15,6 +15,20 @@ class Element {
 const elements = Object.fromEntries([...html.matchAll(/id="([^"]+)"/g)].map(m => [m[1], new Element()]));
 elements.volume.value = '0.8';
 const sockets = [], sent = [];
+const petEnabled = true;
+let petState, petSuspended = true;
+elements.question = new Element();
+elements.answer = new Element();
+const screen = {
+  setState(value, label, {capturing, playing, suspended}) {
+    petState = value; petSuspended = suspended;
+    elements.state.textContent = label;
+    elements['mic-indicator'].hidden = !capturing;
+    elements.face.dataset.playing = String(playing);
+  },
+  caption(kind, text) { elements[kind].textContent = text; },
+  clearCaptions() { elements.question.textContent = elements.answer.textContent = ''; },
+};
 const uploads = [], listeners = {}, windowListeners = {}, canvases = [], timers = new Map();
 let timerId = 0, sessionStatus = 200, sessionRequests = 0;
 const setTimer = (callback, milliseconds) => { const id = ++timerId; timers.set(id, {callback, milliseconds}); return id; };
@@ -47,8 +61,8 @@ class Socket {
   close() { this.readyState = 3; this.onclose?.(); }
 }
 const context = vm.createContext({
-  document: {getElementById: id => elements[id], createElement, addEventListener(name, callback) { listeners[name] = callback; }},
-  window: {addEventListener(name, callback) { windowListeners[name] = callback; }}, location: {protocol: 'https:', host: 'phone.test'},
+  document: {body:{classList:{add() {}}}, getElementById: id => elements[id], createElement, addEventListener(name, callback) { listeners[name] = callback; }},
+  window: {LingxiPet:{mountScreen:() => screen}, addEventListener(name, callback) { windowListeners[name] = callback; }}, location: {protocol: 'https:', host: 'phone.test'},
   fetch: async () => { sessionRequests++; return {ok:sessionStatus === 200, status:sessionStatus, json:async () => ({csrf:'test-csrf'})}; }, WebSocket:Socket,
   setTimeout:setTimer, clearTimeout:clearTimer, setInterval, clearInterval, ArrayBuffer, TextDecoder, AbortController,
   XMLHttpRequest:Upload, crypto:{randomUUID}, File, URL:{createObjectURL: () => 'blob:test', revokeObjectURL() {}},
@@ -82,6 +96,17 @@ assert.equal(elements.send.disabled, false);
 assert.equal(elements.mic.disabled, false);
 assert.match(elements['binding-label'].textContent, /已连接会话/);
 assert.equal(elements.text.value, 'Keep this question');
+if (petEnabled) {
+  assert.equal(petSuspended, false);
+  assert.equal(petState, 'neutral');
+  const messages = sent.length;
+  for (const [state, expected] of Object.entries({listening:'listening', transcribing:'thinking', thinking:'thinking', synthesizing:'updating', speaking:'question', error:'error', offline:'offline', idle:'neutral'})) {
+    receive({type:'state', state});
+    assert.equal(petState, expected);
+  }
+  assert.equal(elements.face.dataset.playing, 'false', 'A server speaking event without actual playback must not animate a voice waveform');
+  assert.equal(sent.length, messages, 'Visual events never send Agent commands');
+}
 elements.sessions.value = 'two';
 elements.sessions.onchange();
 assert.equal(elements.send.disabled, true, 'A pending selection must not send to the old binding');
@@ -122,6 +147,7 @@ elements['compress-photo'].checked = false;
 choose();
 let pending = elements.send.onclick(); await tick();
 let upload = uploads.at(-1);
+if (petEnabled) assert.equal(petState, 'updating', 'An upload must not show idle click actions');
 assert.equal(upload.headers['X-CSRF'], 'test-csrf');
 upload.upload.onprogress({loaded:1024});
 assert.equal(elements['upload-progress'].value, 50);
@@ -240,6 +266,7 @@ assert.equal(submissions(), 1);
 sessionStatus = 401; sockets.at(-1).close();
 elements.reconnect.onclick(); await tick();
 assert.equal(elements.login.hidden, false);
+if (petEnabled) assert.equal(petSuspended, true, 'Expired login pauses pet decoding');
 assert.match(elements['login-error'].textContent, /登录已过期/);
 assert.equal(elements['photo-preview'].hidden, false);
 const expiredCount = sessionRequests;

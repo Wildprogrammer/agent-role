@@ -25,6 +25,14 @@ from .attachments import AttachmentBinding, AttachmentError, AttachmentStore
 ID = re.compile(r"^[a-f0-9]{32}$")
 MAX_PCM = 16000 * 2 * 60
 STATIC = Path(__file__).with_name("static")
+MOBILE_STATIC_FILES = frozenset({
+    "mobile.js", "mobile.css", "mobile-recorder.js", "style.css",
+    "pet.js", "pet.css", "pet-preview.html", "pet-preview.css", "pet-preview.js",
+    "pet-attribution.html", "lingxi-pet-assets.json",
+} | {f"lingxi-pet-{clip}.webm" for clip in (
+    "idle", "look", "think", "work", "wait", "success", "error", "talk",
+    "sleep", "wave", "shy", "laugh", "stretch", "magic",
+)})
 
 
 def binding_snapshot(device: str, value: dict) -> AttachmentBinding:
@@ -111,7 +119,13 @@ class MobileChannel:
             response = await handler(request)
         except (ValueError, AttachmentError) as exc:
             response = web.json_response({"error": str(exc)}, status=getattr(exc, "status_code", 400))
-        response.headers.update({"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff",
+        is_pet_clip = (
+            request.path.startswith("/static/lingxi-pet-")
+            and request.path.removeprefix("/static/") in MOBILE_STATIC_FILES
+            and request.path.endswith(".webm")
+        )
+        cache_control = "private, max-age=86400" if is_pet_clip and request.query.get("v") == "0.4.7" else "no-store"
+        response.headers.update({"Cache-Control": cache_control, "X-Content-Type-Options": "nosniff",
             "Referrer-Policy": "no-referrer", "Permissions-Policy": "camera=(self), microphone=(self)",
             "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob:; media-src 'self' blob:; connect-src 'self'; frame-ancestors 'none'"})
         return response
@@ -124,7 +138,7 @@ class MobileChannel:
 
     async def static(self, request):
         name = request.match_info["name"]
-        if name not in {"mobile.js", "mobile.css", "mobile-recorder.js", "style.css"}:
+        if name not in MOBILE_STATIC_FILES:
             raise web.HTTPNotFound()
         return web.FileResponse(STATIC / name)
 

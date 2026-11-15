@@ -23,3 +23,15 @@ licenses remain their own; the Hub MIT License does not replace them.
 Python package licenses are resolved from `pyproject.toml` by the installer.
 Release automation should generate an SBOM and verify dependency licenses for
 the exact locked environment before publishing binary artifacts.
+
+
+### Optional Lingxi pet videos
+
+The optional installer retrieves unmodified animation assets from
+[dsh-pet 0.4.7](https://github.com/PC2005-cloud/dsh-pet).
+The character and these assets are subject to
+[CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/).
+The original character 溟月 is by 上善无形; the DeepSeek-style design is by
+ZipZipPipe; the dsh-pet animation project is maintained by PC2005-cloud.
+See the [Gateway attribution guide](workflows/agent-session-gateway/references/companion-pet.md)
+for source links and the fixed manifest for individual clip provenance.

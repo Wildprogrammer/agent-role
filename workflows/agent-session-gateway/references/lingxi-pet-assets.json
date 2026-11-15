@@ -1,0 +1,107 @@
+{
+  "project": "https://github.com/PC2005-cloud/dsh-pet",
+  "version": "0.4.7",
+  "asset_license": "CC-BY-NC-SA-4.0",
+  "modified": false,
+  "assets": [
+    {
+      "id": "idle",
+      "file": "lingxi-pet-idle.webm",
+      "source": "https://unpkg.com/dsh-pet@0.4.7/assets/webm/%E5%BE%85%E6%9C%BA%E5%91%BC%E5%90%B8%E4%BC%91%E9%97%B2.webm",
+      "bytes": 441437,
+      "sha256": "deb965d05a85dacf5ff4a20faa757846f0d11679598c3ec578a5571487660395"
+    },
+    {
+      "id": "look",
+      "file": "lingxi-pet-look.webm",
+      "source": "https://unpkg.com/dsh-pet@0.4.7/assets/webm/%E4%B8%9C%E5%BC%A0%E8%A5%BF%E6%9C%9B.webm",
+      "bytes": 427005,
+      "sha256": "a20ed02ccc5e72075a3ca83fabb57d9aac5ded699f52d00ec6de72069799fcd5"
+    },
+    {
+      "id": "think",
+      "file": "lingxi-pet-think.webm",
+      "source": "https://unpkg.com/dsh-pet@0.4.7/assets/webm/%E5%B7%A5%E4%BD%9C%E7%8A%B6%E6%80%81-%E6%80%9D%E8%80%83%E5%86%92%E6%B3%A1.webm",
+      "bytes": 408849,
+      "sha256": "b4a36cfa28ea5d7089e362a01972c6e880297c6dcd0d39f1994efd889a3c1be5"
+    },
+    {
+      "id": "work",
+      "file": "lingxi-pet-work.webm",
+      "source": "https://unpkg.com/dsh-pet@0.4.7/assets/webm/%E5%B7%A5%E4%BD%9C%E7%8A%B6%E6%80%81-%E5%BF%99%E7%A2%8C%E7%82%B9%E6%8C%89.webm",
+      "bytes": 475613,
+      "sha256": "b5d702e0c04adb7b255ac702001c24da36c8bf95efc891f693f4976986ab2435"
+    },
+    {
+      "id": "wait",
+      "file": "lingxi-pet-wait.webm",
+      "source": "https://unpkg.com/dsh-pet@0.4.7/assets/webm/%E5%B7%A5%E4%BD%9C%E7%8A%B6%E6%80%81-%E5%8E%9F%E5%9C%B0%E8%B8%B1%E6%AD%A5%E5%BC%A0%E6%9C%9B.webm",
+      "bytes": 471725,
+      "sha256": "a56c17ef901fa531324a46a04def2381f65922d319ec83dadde34d2a4669e411"
+    },
+    {
+      "id": "success",
+      "file": "lingxi-pet-success.webm",
+      "source": "https://unpkg.com/dsh-pet@0.4.7/assets/webm/%E5%B7%A5%E4%BD%9C%E7%8A%B6%E6%80%81-%E9%9B%80%E8%B7%83%E5%BA%86%E7%A5%9D.webm",
+      "bytes": 488024,
+      "sha256": "3ff681051a0bb4f152d7535d64b7f3194c30298bf56d41e521216a278f135d3e"
+    },
+    {
+      "id": "error",
+      "file": "lingxi-pet-error.webm",
+      "source": "https://unpkg.com/dsh-pet@0.4.7/assets/webm/%E5%B7%A5%E4%BD%9C%E7%8A%B6%E6%80%81-%E5%9E%82%E5%A4%B4%E5%8F%B9%E6%B0%94%E5%86%92%E6%B1%97.webm",
+      "bytes": 198937,
+      "sha256": "ab00c844e62221905574b4c070e0d7b6fa14fb2afa1064c27a160f10e25f7196"
+    },
+    {
+      "id": "talk",
+      "file": "lingxi-pet-talk.webm",
+      "source": "https://unpkg.com/dsh-pet@0.4.7/assets/webm/%E7%A2%8E%E7%A2%8E%E5%BF%B5-%E5%AF%B9%E5%B1%8F%E7%A2%8E%E7%A2%8E%E5%BF%B5.webm",
+      "bytes": 364946,
+      "sha256": "fda85ca286e173b7cf868c91829c3445e55c395e0c788b6be310a855b9b37973"
+    },
+    {
+      "id": "sleep",
+      "file": "lingxi-pet-sleep.webm",
+      "source": "https://unpkg.com/dsh-pet@0.4.7/assets/webm/%E7%9D%A1%E8%A7%89-%E5%BE%AA%E7%8E%AF.webm",
+      "bytes": 237002,
+      "sha256": "b49deb9b8dae4b83f84b6dc49efd41fdb654b05ad08ac6c5083977e17ef1122c"
+    },
+    {
+      "id": "wave",
+      "file": "lingxi-pet-wave.webm",
+      "source": "https://unpkg.com/dsh-pet@0.4.7/assets/webm/%E7%82%B9%E5%87%BB%E5%9B%9E%E5%BA%94-%E5%85%83%E6%B0%94%E6%8C%A5%E6%89%8B.webm",
+      "bytes": 421669,
+      "sha256": "48cd729ccdcf746369942ea954d242e9afdd5643e1dac3827fa5e67450eb8776"
+    },
+    {
+      "id": "shy",
+      "file": "lingxi-pet-shy.webm",
+      "source": "https://unpkg.com/dsh-pet@0.4.7/assets/webm/%E7%82%B9%E5%87%BB%E5%9B%9E%E5%BA%94-%E5%AE%B3%E7%BE%9E%E6%83%8A%E8%AE%B6.webm",
+      "bytes": 538281,
+      "sha256": "a04968bbc46d1ebea07f81e5dabd93b0b67a9d07f1371e9887b33075134ad00d"
+    },
+    {
+      "id": "laugh",
+      "file": "lingxi-pet-laugh.webm",
+      "source": "https://unpkg.com/dsh-pet@0.4.7/assets/webm/%E7%82%B9%E5%87%BB%E5%9B%9E%E5%BA%94-%E6%8C%A0%E7%97%92%E5%92%AF%E5%92%AF%E7%AC%91.webm",
+      "bytes": 425393,
+      "sha256": "f228279219f4084323ca1bfef1604f7c77bb3f505d45a8d1747b5ac3f9f2393b"
+    },
+    {
+      "id": "stretch",
+      "file": "lingxi-pet-stretch.webm",
+      "source": "https://unpkg.com/dsh-pet@0.4.7/assets/webm/%E8%B6%85%E5%A4%A7%E4%BC%B8%E6%87%92%E8%85%B0.webm",
+      "bytes": 396987,
+      "sha256": "0ac66d918cc5efd49be1273c3830de73eae5f9bdcd5fcb968d1b2f9b487705ad"
+    },
+    {
+      "id": "magic",
+      "file": "lingxi-pet-magic.webm",
+      "source": "https://unpkg.com/dsh-pet@0.4.7/assets/webm/%E8%9D%B4%E8%9D%B6%E8%9C%9C%E8%9C%82%E7%8E%AF%E7%BB%95%E5%A4%B4%E9%A1%B6%E5%BC%80%E8%8A%B1.webm",
+      "bytes": 852828,
+      "sha256": "fd286c78001fe57fc093c06a4b79ef077ade2dacd2a77e011d3f393f587707ec"
+    }
+  ],
+  "reference_tree": "be4536da0ca71947058777d904874977ab9ab841"
+}

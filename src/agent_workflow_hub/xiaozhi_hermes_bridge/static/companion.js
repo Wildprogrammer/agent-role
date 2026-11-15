@@ -25,12 +25,15 @@
   let moodClearTimer = null;
   let moodIndex = 0;
   let butterflyIndex = 0;
-  const textFrames = { question: null, answer: null };
   const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
   const UI_IDLE_MS = 4000;
   const LIVE_POLL_MS = 500;
   const COMPLETED_DIALOGUE_MS = 60000;
   const byId = (id) => document.getElementById(id);
+  const screen = window.LingxiPet.mountScreen({
+    face: byId("face"), microphone: byId("mic-indicator"),
+    dialogue: byId("live-dialogue"), status: byId("state-title"),
+  });
   const liveState = {
     privacy: false,
     captureActive: false,
@@ -38,13 +41,14 @@
     turnId: "",
     revision: 0,
     question: "",
+    questionTruncated: false,
     answer: "",
     answerTruncated: false,
     answerHeadLength: 0,
     answerOmittedCharacters: 0,
   };
   const labels = {
-    neutral: "我在听", listening: "正在聆听", thinking: "正在思考",
+    neutral: "我在呢", listening: "正在聆听", thinking: "正在思考",
     speaking: "正在回答", question: "等待确认", happy: "完成啦",
     error: "遇到问题", offline: "等待设备", pairing: "正在配网",
     updating: "正在更新", audio_testing: "音频检查", privacy: "隐私模式",
@@ -96,12 +100,6 @@
     window.setTimeout(() => butterfly.remove(), reducedMotion.matches ? 800 : 1800);
   }
 
-  function setFaceState(value) {
-    const safe = labels[value] ? value : "neutral";
-    byId("face").dataset.state = safe;
-    lingxi.text("state-title", labels[safe]);
-  }
-
   function effectiveExpression() {
     if (!device?.online) return "offline";
     if (liveState.privacy) return "privacy";
@@ -137,25 +135,14 @@
   }
 
   function renderActivity() {
-    const mic = byId("mic-indicator");
-    const micActive = liveState.captureActive && !liveState.privacy && Boolean(device?.online);
-    mic.hidden = !micActive;
-    mic.classList.toggle("active", micActive);
-    byId("face").classList.toggle("capturing", micActive);
-    setFaceState(effectiveExpression());
+    const expression = effectiveExpression();
+    screen.setState(expression, labels[expression] || labels.neutral, {
+      capturing: liveState.captureActive && !liveState.privacy && Boolean(device?.online),
+      playing: liveState.speechActive && !liveState.privacy && Boolean(device?.online),
+      suspended: !byId("login").hidden,
+    });
     if (liveState.speechActive && byId("face").dataset.mood === "none" && moodTimer === null) scheduleMood();
     else if (!liveState.speechActive || liveState.privacy) clearMood();
-  }
-
-  function cancelTextAnimation(kind) {
-    const frame = textFrames[kind];
-    if (frame !== null) window.cancelAnimationFrame(frame);
-    textFrames[kind] = null;
-  }
-
-  function cancelTextAnimations() {
-    cancelTextAnimation("question");
-    cancelTextAnimation("answer");
   }
 
   function cancelDialogueClear() {
@@ -180,82 +167,17 @@
     }, COMPLETED_DIALOGUE_MS);
   }
 
-  function graphemes(value) {
-    if (window.Intl?.Segmenter) {
-      const segmenter = new Intl.Segmenter("zh-CN", { granularity: "grapheme" });
-      return Array.from(segmenter.segment(value), (item) => item.segment);
-    }
-    return Array.from(value);
-  }
-
-  function scrollDialogueToLatest() {
-    const dialogue = byId("live-dialogue");
-    dialogue.scrollTop = dialogue.scrollHeight;
-  }
-
-  function animateText(kind, value, truncated, turnId, headLength = 0, omitted = 0) {
-    const node = byId(`${kind}-text`);
-    const line = byId(`${kind}-line`);
-    const cut = byId(`${kind}-cut`);
-    const gap = kind === "answer" ? byId("answer-gap") : null;
-    const tail = kind === "answer" ? byId("answer-tail") : null;
-    cancelTextAnimation(kind);
-    line.hidden = !value;
-    cut.hidden = !value || !truncated || omitted > 0;
-    if (gap) { gap.hidden = true; gap.textContent = ""; }
-    if (tail) tail.textContent = "";
-    if (!value) { node.textContent = ""; return; }
-    byId("live-dialogue").hidden = false;
-    if (kind === "answer" && truncated && omitted > 0 && headLength > 0) {
-      const codePoints = Array.from(value);
-      node.textContent = codePoints.slice(0, headLength).join("");
-      gap.textContent = `中间省略 ${omitted.toLocaleString("zh-CN")} 个字符，完整内容请查看智能体会话`;
-      gap.hidden = false;
-      tail.textContent = codePoints.slice(headLength).join("");
-      scrollDialogueToLatest();
-      return;
-    }
-    const parts = graphemes(value);
-    const current = node.textContent || "";
-    let index = value.startsWith(current) ? graphemes(current).length : 0;
-    if (reducedMotion.matches) index = parts.length;
-    node.textContent = parts.slice(0, index).join("");
-    scrollDialogueToLatest();
-    if (index >= parts.length) return;
-    const generation = viewGeneration;
-    const duration = Math.min(5200, Math.max(420, parts.length * (kind === "question" ? 24 : 13)));
-    const step = Math.max(1, Math.ceil(parts.length / Math.max(1, duration / 16)));
-    const tick = () => {
-      if (generation !== viewGeneration || turnId !== liveState.turnId || liveState.privacy) return;
-      index = Math.min(parts.length, index + step);
-      node.textContent = parts.slice(0, index).join("");
-      scrollDialogueToLatest();
-      if (index < parts.length) textFrames[kind] = window.requestAnimationFrame(tick);
-      else textFrames[kind] = null;
-    };
-    textFrames[kind] = window.requestAnimationFrame(tick);
-  }
-
   function clearDialogue() {
     cancelDialogueClear();
-    cancelTextAnimations();
     liveState.turnId = "";
     liveState.revision = 0;
     liveState.question = "";
+    liveState.questionTruncated = false;
     liveState.answer = "";
     liveState.answerTruncated = false;
     liveState.answerHeadLength = 0;
     liveState.answerOmittedCharacters = 0;
-    lingxi.text("question-text", "");
-    lingxi.text("answer-text", "");
-    lingxi.text("answer-tail", "");
-    lingxi.text("answer-gap", "");
-    byId("answer-gap").hidden = true;
-    byId("question-line").hidden = true;
-    byId("answer-line").hidden = true;
-    byId("question-cut").hidden = true;
-    byId("answer-cut").hidden = true;
-    byId("live-dialogue").hidden = true;
+    screen.clearCaptions();
   }
 
   function applyProjection(projection) {
@@ -277,9 +199,11 @@
     const revision = Number.isInteger(projection.revision) ? projection.revision : 0;
     if (nextTurn && nextTurn === liveState.turnId && revision >= liveState.revision) {
       liveState.revision = revision;
-      if (question !== liveState.question) {
+      const questionTruncated = projection.question_truncated === true;
+      if (question !== liveState.question || questionTruncated !== liveState.questionTruncated) {
         liveState.question = question;
-        animateText("question", question, projection.question_truncated === true, nextTurn);
+        liveState.questionTruncated = questionTruncated;
+        screen.caption("question", question, {truncated: questionTruncated});
       }
       const answerTruncated = projection.answer_truncated === true;
       const answerHeadLength = Number.isInteger(projection.answer_head_length) ? projection.answer_head_length : 0;
@@ -289,9 +213,8 @@
         liveState.answerTruncated = answerTruncated;
         liveState.answerHeadLength = answerHeadLength;
         liveState.answerOmittedCharacters = answerOmittedCharacters;
-        animateText("answer", answer, answerTruncated, nextTurn, answerHeadLength, answerOmittedCharacters);
+        screen.caption("answer", answer, {truncated: answerTruncated, headLength: answerHeadLength, omitted: answerOmittedCharacters});
       }
-      byId("live-dialogue").hidden = !question && !answer;
     }
     const projectionTargetsDisplayedTurn = Boolean(nextTurn && nextTurn === liveState.turnId);
     if (projectionTargetsDisplayedTurn && liveState.speechActive) cancelDialogueClear();
@@ -493,6 +416,7 @@
     uiTimer = null;
     byId("companion").classList.remove("ui-hidden");
     byId("login").hidden = false;
+    renderActivity();
     byId("login-password").focus();
   }
 
@@ -533,16 +457,13 @@
   }
 
   function motionPreferenceChanged() {
-    cancelTextAnimations();
-    if (liveState.question) lingxi.text("question-text", liveState.question);
-    if (liveState.answer) animateText(
-      "answer",
-      liveState.answer,
-      liveState.answerTruncated,
-      liveState.turnId,
-      liveState.answerHeadLength,
-      liveState.answerOmittedCharacters,
-    );
+    if (reducedMotion.matches) {
+      screen.caption("question", liveState.question, {animate: false, truncated: liveState.questionTruncated});
+      screen.caption("answer", liveState.answer, {
+        animate: false, truncated: liveState.answerTruncated,
+        headLength: liveState.answerHeadLength, omitted: liveState.answerOmittedCharacters,
+      });
+    }
     if (reducedMotion.matches) clearMood();
     else if (liveState.speechActive) scheduleMood();
   }

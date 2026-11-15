@@ -184,7 +184,10 @@ class LingxiRequestHandler(BaseHTTPRequestHandler):
                 self._serve_static("index-admin.html" if self.app.scope == "admin" else "index-companion.html")
                 return
             if parsed.path.startswith("/static/"):
-                self._serve_static(parsed.path.removeprefix("/static/"))
+                self._serve_static(
+                    parsed.path.removeprefix("/static/"),
+                    cache_pet_clip=parsed.query == "v=0.4.7",
+                )
                 return
             session = self.app.auth.authenticate(self.headers.get("Cookie", ""))
             if parsed.path == "/api/session":
@@ -479,7 +482,7 @@ class LingxiRequestHandler(BaseHTTPRequestHandler):
         if origin not in {f"http://127.0.0.1:{port}", f"http://localhost:{port}"}:
             raise ControlPlaneError("origin_rejected", "request origin is not allowed", http_status=403)
 
-    def _serve_static(self, name: str) -> None:
+    def _serve_static(self, name: str, *, cache_pet_clip: bool = False) -> None:
         if not name or "/" in name or "\\" in name or name.startswith("."):
             raise ControlPlaneError("not_found", "resource was not found", http_status=404)
         target = (self.app.static_root / name).resolve()
@@ -495,6 +498,8 @@ class LingxiRequestHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", f"{mime}; charset=utf-8" if mime.startswith("text/") else mime)
         self.send_header("Content-Length", str(len(data)))
         for key, value in _SECURITY_HEADERS.items():
+            if key == "Cache-Control" and cache_pet_clip and target.name.startswith("lingxi-pet-") and target.suffix == ".webm":
+                value = "private, max-age=86400"
             self.send_header(key, value)
         self.end_headers()
         self.wfile.write(data)

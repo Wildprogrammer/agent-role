@@ -759,6 +759,11 @@ class DeepSeekHarnessAdapter:
         persona: str,
         facts: HostFacts,
     ) -> str:
+        if facts.version == "0.2.2-rc.1" and "{{cwd}}" in persona:
+            raise DeepSeekHarnessAdapterError(
+                "DSH 0.2.2-rc.1 does not register the {{cwd}} Persona variable. "
+                "Remove it and use the built-in working-directory context."
+            )
         try:
             return render_v2_preset_patch(
                 _stable_bytes(Path(cast(str, facts.facts["standard_patch"]))).decode("utf-8"),

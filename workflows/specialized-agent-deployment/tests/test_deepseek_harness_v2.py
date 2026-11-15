@@ -179,6 +179,10 @@ def test_v2_discovery_apply_and_verify_on_mixed_newlines(
         name="primary-flow", source_kind="external-skill", source=str(skill.parent),
         reason="fixture",
     )),)
+    if version == "0.2.2-rc.1":
+        with pytest.raises(DeepSeekHarnessAdapterError, match="does not register"):
+            adapter.plan_writes(requested, snapshots, "Working directory is {{cwd}}.", facts)
+        assert profile_patch.read_bytes() == original_patch
     writes = adapter.plan_writes(requested, snapshots, render_persona(requested, snapshots), facts)
     assert {item.parameters.get("payload_kind") for item in writes} >= {
         "v2-preset", "v2-profile-patch", "marker"

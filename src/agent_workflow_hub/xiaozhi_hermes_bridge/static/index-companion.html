@@ -4,7 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>灵溪伴随屏</title>
-  <link rel="stylesheet" href="/static/style.css?v=8">
+  <link rel="stylesheet" href="/static/style.css?v=9">
+  <link rel="stylesheet" href="/static/pet.css?v=2">
 </head>
 <body class="companion-page">
   <div class="login" id="login">
@@ -16,16 +17,12 @@
     </form>
   </div>
   <main class="companion" id="companion">
+    <div class="pet-heading companion-ui">灵溪 · 伴随屏<small>在这里，陪你一起想</small></div>
     <div class="butterfly-stage" id="butterfly-stage" aria-hidden="true"></div>
     <section class="companion-panel">
-      <div class="face-wrap" id="face" data-state="offline" data-mood="none" aria-label="灵溪状态表情">
-        <div class="face"><span class="eye left"></span><span class="eye right"></span><span class="mouth"></span></div>
-      </div>
-      <div class="mic-indicator" id="mic-indicator" aria-live="polite" hidden><span class="mic-glyph"></span><span class="mic-wave"><i></i><i></i><i></i><i></i></span><span>正在听你说</span></div>
-      <section class="live-dialogue" id="live-dialogue" aria-label="当前问答" hidden>
-        <article class="dialogue-line question-line" id="question-line" hidden><span class="dialogue-role">你</span><p id="question-text"></p><span class="caption-cut" id="question-cut" hidden>内容已截断</span></article>
-        <article class="dialogue-line answer-line" id="answer-line" hidden><span class="dialogue-role">灵溪</span><p><span id="answer-text"></span><span class="caption-gap" id="answer-gap" hidden></span><span id="answer-tail"></span></p><span class="caption-cut" id="answer-cut" hidden>内容已截断</span></article>
-      </section>
+      <div class="face-wrap pet-stage" id="face" data-state="offline" data-mood="none"></div>
+      <div class="mic-indicator" id="mic-indicator" hidden></div>
+      <section class="live-dialogue" id="live-dialogue" aria-label="当前问答" hidden></section>
       <div class="meta companion-ui"><h1 id="state-title">等待设备</h1><p class="muted meta-detail" id="binding-title">尚未连接</p><p class="badge" id="device-id">离线</p></div>
       <div class="companion-controls companion-ui">
         <button class="danger" id="stop" disabled>停止播报</button>
@@ -35,8 +32,10 @@
       <div class="companion-controls companion-ui" id="confirmation" hidden><button class="primary" id="confirm">确认操作</button><button class="danger" id="cancel">取消</button></div>
       <p class="notice companion-ui" id="notice" aria-live="polite">正在等待灵溪设备上线……</p>
     </section>
+    <footer class="pet-credit companion-ui"><a href="/static/pet-attribution.html" target="_blank" rel="noopener">形象与动画：dsh-pet · CC BY-NC-SA 4.0</a> · <a href="/static/pet-preview.html" target="_blank" rel="noopener">动作预览</a></footer>
   </main>
   <script src="/static/common.js?v=2"></script>
-  <script src="/static/companion.js?v=6"></script>
+  <script src="/static/pet.js?v=2"></script>
+  <script src="/static/companion.js?v=8"></script>
 </body>
 </html>

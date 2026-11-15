@@ -3,7 +3,8 @@
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#070e13"><title>灵溪 · 手机终端</title>
-  <link rel="stylesheet" href="/static/mobile.css">
+  <link rel="stylesheet" href="/static/pet.css?v=2">
+  <link rel="stylesheet" href="/static/mobile.css?v=3">
 </head>
 <body>
   <form id="login" class="login">
@@ -15,11 +16,12 @@
   <main id="app" hidden>
     <header><span class="eyebrow">灵溪 · 手机终端</span><button id="mute" class="quiet" aria-pressed="false" disabled title="仅文字模式会跳过语音合成">静音 / 仅文字</button><button id="reconnect" class="quiet" hidden>重新连接</button><button id="fullscreen" class="quiet">全屏</button><button id="logout" class="quiet">退出</button></header>
     <section class="stage" aria-label="灵溪表情">
-      <div class="face" id="face" data-state="idle"><i></i><i></i></div>
-      <div class="status"><span id="mic-indicator" hidden>● </span><span id="state">准备好了</span></div>
+      <div class="face-wrap pet-stage" id="face" data-state="offline"></div>
+      <div class="mic-indicator" id="mic-indicator" hidden></div>
+      <div class="status" id="state" role="status">准备好了</div>
       <p id="binding-label">请选择智能体和会话</p>
     </section>
-    <section class="dialogue" aria-live="polite"><article id="question"></article><article id="answer"></article></section>
+    <section class="live-dialogue" id="live-dialogue" aria-label="当前问答" aria-live="polite" hidden></section>
     <section class="composer">
       <div id="photo-preview" hidden><img id="preview" alt="待发送照片"><button id="remove-photo">移除照片</button></div>
       <label class="photo-option"><input id="compress-photo" type="checkbox" checked> 压缩大图后上传（取消勾选发送原图）</label>
@@ -30,6 +32,8 @@
       <p id="notice" role="status">首次使用请允许麦克风和相机。再次点击结束收音并发送。</p>
     </section>
     <details id="settings" class="settings"><summary>智能体与会话</summary><div class="selectors"><label>智能体<select id="agents"></select></label><button id="refresh">刷新列表</button><label>已有会话<select id="sessions"></select></label><button id="bind">使用此会话</button></div><p>选好智能体和已有会话后，请点击“使用此会话”。显示“已连接会话”后即可发送；仅改变下拉选项不会切换聊天目标。</p></details>
+    <footer id="pet-credit" class="mobile-pet-credit" hidden><a href="/static/pet-attribution.html" target="_blank" rel="noopener">桌宠素材与署名</a> · <a href="/static/pet-preview.html" target="_blank" rel="noopener">动作预览</a></footer>
   </main>
-  <script src="/static/mobile.js"></script>
+  <script src="/static/pet.js?v=2"></script>
+  <script src="/static/mobile.js?v=3"></script>
 </body></html>
