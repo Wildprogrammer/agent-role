@@ -250,7 +250,11 @@ def test_api_server_transport_roundtrip_and_section() -> None:
     assert text.count("agent-workflow-hub:collaboration:test-requirements:start") == 1
     # HTTP 通道四要素
     assert "http://127.0.0.1:8642/p/autotestplatform-business-support/v1/runs" in text
-    assert "Authorization: Bearer ${BUSINESS_SUPPORT_API_KEY}" in text
+    assert 'test -n "${BUSINESS_SUPPORT_API_KEY:-}"' in text
+    assert """printf 'Authorization: Bearer %s\\n' "${BUSINESS_SUPPORT_API_KEY}" |""" in text
+    assert "--noproxy '*' --max-time 30 -H @-" in text
+    assert '-H "Authorization: Bearer' not in text
+    assert "canonical Bot Chat 会话（Desktop）：使用内建 `message_agent` 工具。" in text
     assert "/v1/runs/$RID" in text
     assert '"session_id"' in text
     assert '"conversation"' not in text

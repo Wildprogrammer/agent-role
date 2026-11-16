@@ -11,17 +11,28 @@ create 使用隔离 Profile，不创建 alias，不复制默认 Skills。Persona
 ```json
 {
   "id": "test-requirements",
-  "agent_id": "autotestplatform-business-support",
+  "agent_id": "business-provider",
   "transport": "hermes-api-server",
   "capability": "business-requirement-support",
   "local_role": "consumer",
   "peer_workflow": "knowledge-support-agent",
-  "api_server_base_url": "http://127.0.0.1:8642/p/autotestplatform-business-support",
-  "api_server_key_env": "BUSINESS_SUPPORT_API_KEY"
+  "api_server_base_url": "http://127.0.0.1:8080/p/business-provider",
+  "api_server_key_env": "PEER_RUNS_API_KEY"
 }
 ```
 
-Hub 不生成或保存该密钥。API 协作采用两阶段流程：先用不含该 API 协作者的 create 请求建立受管核心 Profile；运维在 consumer Profile 的 `.env` 手动配置非空的 `<api_server_key_env>`（值取自提供方 Profile 的 `API_SERVER_KEY`）；然后用 `mode=update` 加入协作者。发现阶段会检查 consumer 变量、提供方 Profile 注册状态、`config.yaml` 的 `platforms.api_server.enabled: true` 与提供方 `.env` 的非空 `API_SERVER_KEY`，但只记录布尔结果，不读取或暴露值；缺失即 fail-closed，不产生可执行计划。写入 consumer 的协作文案显式禁止读取/执行对端 Profile 目录脚本、向对端工作目录写文件或用 Shell 嵌套 `hermes ... chat`。
+将示例中的 Profile、回环端口和变量名替换为实际部署值。Hub 采用两阶段配置：
+
+1. 用不含该 API 协作者的 create 请求建立受管核心 Profile。
+2. 运维在 consumer Profile 的 `.env` 设置 `api_server_key_env` 指定的变量，值取自提供方 Profile 的 `API_SERVER_KEY`。在同一个 consumer Profile 的 `config.yaml` 中把该**变量名**追加到 `terminal.env_passthrough`，保留原有列表项。已运行的 Gateway 在下次正常重启后读取该设置。随后用 `mode=update` 加入协作者。
+
+```yaml
+terminal:
+  env_passthrough:
+    - PEER_RUNS_API_KEY
+```
+
+发现阶段检查 consumer 变量、提供方 Profile 注册状态、`platforms.api_server.enabled: true` 和提供方的 `API_SERVER_KEY` 是否存在，仅记录布尔结果。Hub 不生成、复制或写入密钥，也不修改终端放行列表。生成的调用示例只访问声明的回环端点，认证头经标准输入传给 curl。写入 consumer 的协作说明禁止直接访问对端 Profile 目录、脚本和工作目录。
 
 通用源 Skill 保持不变，协作规则只写入目标 Profile 的 Skill 副本和 Persona。目标 Profile 同时生成或合并 `profile.yaml`，写入最小 `ui_meta['hermes-bots']` 标题和说明，使该安装进入 Bot Mode 管理态；缺少这份元数据时，即使 CLI 会话标题为 `Bot Chat` 也不会注入 `message_agent`（此 roster 要求与是否选择 api_server 传输无关）。需要同步既有对端时，只更新其 `AGENTS.md` 与请求声明的一个 Skill 副本；两条写入都绑定原 SHA 并进入事务备份，不接管整个 Profile。
 

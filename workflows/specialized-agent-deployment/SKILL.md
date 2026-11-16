@@ -34,7 +34,7 @@ metadata:
 
 使用符合 `references/deployment-request.schema.json` 的绝对 JSON 文件。请求明确给出 Agent 身份、用途、宿主、create/update 模式、主工作流、关联工作流、辅助 Skill、工作目录、外置配置引用和宿主选项。
 
-需要 Agent 间协作时，使用可选 `collaborators` 显式声明对端 Agent、对端工作流、本地角色、能力和传输方式。结构化协作者请求支持两种 Hermes 传输：`hermes-bot-mode` 走 Hermes Desktop Bot Mode canonical `Bot Chat` 的内建 `message_agent`；`hermes-api-server` 仅供 `local_role=consumer`，并要求 Hermes >= 0.21.0，在微信/网关等无 `message_agent` 的会话中通过对端 Profile 的本机 api_server Runs API（`POST/GET {api_server_base_url}/v1/runs`，密钥取自 consumer `.env` 中 `api_server_key_env` 指向的变量，提交后轮询 run_id）做异步咨询。API 地址只允许回环 HTTP，路径必须精确为 `/p/<agent_id>`。两者共用同一 `ANSWERED/NEED_USER/CONFLICT` 三态协议。
+需要 Agent 间协作时，使用可选 `collaborators` 显式声明对端 Agent、对端工作流、本地角色、能力和传输方式。结构化协作者请求支持两种 Hermes 传输：`hermes-bot-mode` 走 Hermes Desktop Bot Mode canonical `Bot Chat` 的内建 `message_agent`；`hermes-api-server` 仅供 `local_role=consumer`，并要求 Hermes >= 0.21.0，在微信/网关等无 `message_agent` 的会话中通过对端 Profile 的本机 api_server Runs API 做异步咨询。按 [Hermes 部署说明](references/hermes.md) 在 consumer Profile 的 `.env` 配置密钥，并在 `terminal.env_passthrough` 放行 `api_server_key_env` 指定的变量名。API 地址只允许回环 HTTP，路径必须精确为 `/p/<agent_id>`。两者共用同一 `ANSWERED/NEED_USER/CONFLICT` 三态协议。
 
 `hermes-api-server` 仅支持 `business-requirement-support`，并采用显式两阶段配置：先创建不含该 API 协作者的核心 consumer Profile；运维再配置 consumer 密钥，并确认提供方已注册、启用 api_server 且配置 `API_SERVER_KEY`；最后以 `mode=update` 加入协作者。发现阶段只检查密钥是否存在且非空，不读取或保存明文，任何前提不满足都返回指导态且不生成写入计划。部署文案显式禁止读取/执行对端 profile 目录脚本、向对端写文件或用 Shell 嵌套 Hermes CLI。DeepSeek Harness 的固定业务协作者按宿主参考中的部署副本专用扩展执行。部署系统只修改部署目标中的 Skill 副本，不得修改通用源 Skill；协作扩展的目标字节和摘要必须进入同一 plan SHA。完整启用或声明 Hermes 协作者时，目标 Profile 还必须生成或合并 `profile.yaml` 的 Bot Mode 管理元数据，使 Hermes 将其纳入 roster 并向 canonical `Bot Chat` 注入 `message_agent`；只创建同名 CLI 会话不能替代此元数据。
 
